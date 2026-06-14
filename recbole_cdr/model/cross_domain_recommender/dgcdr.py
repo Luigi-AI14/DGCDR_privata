@@ -248,7 +248,8 @@ class DGCDR(CrossDomainRecommender):
             b_1 = a_1.unsqueeze(1)
             b_2 = a_2.unsqueeze(1)
 
-            att = torch.cat((b_1, b_2), dim=1)
+            scale = np.sqrt(user_embeddings.shape[-1])
+            att = torch.cat((b_1, b_2), dim=1) / scale
             softed_att = F.softmax(att, dim=1)
 
             c_1 = softed_att[:, 0].unsqueeze(1).repeat(1, common_preference.shape[1])
@@ -553,7 +554,7 @@ class DGCDR(CrossDomainRecommender):
             if self.cl_org_weight != 0:
                 sr_L_ort_cs = torch.mean(torch.sum(torch.mul(sr_common_c, sr_common_s), dim=1) ** 2,
                                          dim=0)  # force public and specific features to separate from each other
-                tg_L_ort_cs = torch.mean(torch.sum(torch.mul(tg_common_c, tg_common_s), dim=1),
+                tg_L_ort_cs = torch.mean(torch.sum(torch.mul(tg_common_c, tg_common_s), dim=1) ** 2,
                                          dim=0)  # force public and specific features to separate from each other
                 losses.extend(self.cl_org_weight * loss for loss in [sr_L_ort_cs, tg_L_ort_cs])
 
