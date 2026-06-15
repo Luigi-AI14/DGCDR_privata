@@ -23,7 +23,9 @@ if __name__ == '__main__':
     # data_config = 'recbole_cdr/properties/dataset/AmazonSport_AmazonCloth_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonCloth_AmazonSport_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/DoubanMovie_DoubanBook_commonUser_10-core.yaml'
-    data_config = 'recbole_cdr/properties/dataset/DoubanBook_DoubanMovie_commonUser_10-core.yaml'
+    #data_config = 'recbole_cdr/properties/dataset/DoubanBook_DoubanMovie_commonUser_10-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/AmazonInstruments_AmazonCDs_commonUser_3-core.yaml'
+    data_config = 'recbole_cdr/properties/dataset/AmazonCDs_AmazonInstruments_commonUser_3-core.yaml'
 
     model_config = 'recbole_cdr/properties/model/' + model_Name + '.yaml'
 

@@ -4,11 +4,11 @@ import os
 import time
 
 # === DEFAULT CONFIGURATION ===
-DEFAULT_SOURCE_CSV = ''
-DEFAULT_TARGET_CSV = ''
-DEFAULT_SOURCE_NAME = ''
-DEFAULT_TARGET_NAME = ''
-DEFAULT_K_CORE = 5
+DEFAULT_SOURCE_CSV = 'csv_datasets/Musical_Instruments.csv'
+DEFAULT_TARGET_CSV = 'csv_datasets/CDs_and_Vinyl.csv'
+DEFAULT_SOURCE_NAME = 'AmazonInstruments'
+DEFAULT_TARGET_NAME = 'AmazonCDs'
+DEFAULT_K_CORE = 3
 DEFAULT_OUT_DIR = 'dataset'
 # =============================
 
@@ -106,9 +106,91 @@ def main():
     source_out.to_csv(source_path, sep='\t', index=False, header=["user_id:token", "item_id:token", "rating:float"])
     target_out.to_csv(target_path, sep='\t', index=False, header=["user_id:token", "item_id:token", "rating:float"])
 
+    print(f"\n[6/6] Generating corresponding .yaml files...")
+    yaml_dir = os.path.join("recbole_cdr", "properties", "dataset")
+    os.makedirs(yaml_dir, exist_ok=True)
+    
+    yaml_template = """seed: 2022
+field_separator: "\\t"
+#save_dataloaders: True
+#save_dataset: True
+embedding_size: 64
+learning_rate: 0.001
+
+
+eval_args:
+#  split: {{ 'LS': 'valid_and_test' }}  #leave-one-out data splitting
+  split: {{'RS':[0.6,0.2,0.2]}}
+  split_valid: {{'RS': [0.8,0.2]}}  # The source domain is split by 8:2 for training and validation.
+  group_by: user
+  order: RO
+  mode: full
+repeatable: True
+metrics: [ "MRR", "Recall","NDCG","Hit"]
+topk: [20]
+valid_metric: Recall@20
+
+# Training settings
+epochs: 400
+train_batch_size: 4096
+eval_batch_size: 40960
+
+#train_neg_sample_args: None
+
+source_domain:
+  dataset: {src_dataset}
+  data_path: './dataset/'
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  threshold:
+    rating: 4                    # (dict) 0/1 labels will be generated according to the pairs.
+  load_col:
+    inter: [user_id, item_id, rating]
+  user_inter_num_interval: "[0,inf)"
+  item_inter_num_interval: "[0,inf)"
+  val_interval:
+    rating: "[0,inf)"
+  drop_filter_field: True
+
+
+target_domain:
+  dataset: {tgt_dataset}
+  data_path: './dataset/'
+  USER_ID_FIELD: user_id
+  ITEM_ID_FIELD: item_id
+  RATING_FIELD: rating
+  TIME_FIELD: timestamp
+  NEG_PREFIX: neg_
+  LABEL_FIELD: label
+  threshold:
+    rating: 4                    # (dict) 0/1 labels will be generated according to the pairs.
+  load_col:
+    inter: [user_id, item_id, rating]
+  user_inter_num_interval: "[0,inf)"
+  item_inter_num_interval: "[0,inf)"
+  val_interval:
+    rating: "[0,inf)"
+  drop_filter_field: True
+"""
+
+    source_yaml_path = os.path.join(yaml_dir, f"{source_dataset_name}.yaml")
+    target_yaml_path = os.path.join(yaml_dir, f"{target_dataset_name}.yaml")
+    
+    with open(source_yaml_path, "w") as f:
+        f.write(yaml_template.format(src_dataset=source_dataset_name, tgt_dataset=target_dataset_name))
+
+    with open(target_yaml_path, "w") as f:
+        f.write(yaml_template.format(src_dataset=target_dataset_name, tgt_dataset=source_dataset_name))
+
     print(f"Files successfully created in {time.time() - start_time:.1f} seconds:")
     print(f"  - {source_path}")
     print(f"  - {target_path}")
+    print(f"  - {source_yaml_path}")
+    print(f"  - {target_yaml_path}")
 
 if __name__ == '__main__':
     main()
