@@ -4,11 +4,11 @@ import os
 import time
 
 # === DEFAULT CONFIGURATION ===
-DEFAULT_SOURCE_CSV = 'csv_datasets/Musical_Instruments.csv'
-DEFAULT_TARGET_CSV = 'csv_datasets/CDs_and_Vinyl.csv'
-DEFAULT_SOURCE_NAME = 'AmazonInstruments'
-DEFAULT_TARGET_NAME = 'AmazonCDs'
-DEFAULT_K_CORE = 3
+DEFAULT_SOURCE_CSV = 'csv_datasets/Kindle_Store.csv'
+DEFAULT_TARGET_CSV = 'csv_datasets/Books.csv'
+DEFAULT_SOURCE_NAME = 'AmazonKindle'
+DEFAULT_TARGET_NAME = 'AmazonBooks'
+DEFAULT_K_CORE = 5
 DEFAULT_OUT_DIR = 'dataset'
 # =============================
 
