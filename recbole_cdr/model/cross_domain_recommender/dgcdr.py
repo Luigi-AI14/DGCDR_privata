@@ -160,9 +160,18 @@ class DGCDR(CrossDomainRecommender):
 
         # generate intermediate data
         time_field = config['TIME_FIELD'] if 'TIME_FIELD' in config else 'timestamp'
-        self.source_interaction_matrix = dataset.inter_matrix(form='coo', value_field=time_field, domain='source').astype(
+        
+        source_time_field = f'source_{time_field}' if f'source_{time_field}' in dataset.source_domain_dataset.inter_feat else time_field
+        if source_time_field not in dataset.source_domain_dataset.inter_feat:
+            source_time_field = None
+            
+        target_time_field = f'target_{time_field}' if f'target_{time_field}' in dataset.target_domain_dataset.inter_feat else time_field
+        if target_time_field not in dataset.target_domain_dataset.inter_feat:
+            target_time_field = None
+
+        self.source_interaction_matrix = dataset.inter_matrix(form='coo', value_field=source_time_field, domain='source').astype(
             np.float32)
-        self.target_interaction_matrix = dataset.inter_matrix(form='coo', value_field=time_field, domain='target').astype(
+        self.target_interaction_matrix = dataset.inter_matrix(form='coo', value_field=target_time_field, domain='target').astype(
             np.float32)
         self.source_norm_adj_matrix = self.get_norm_adj_mat(self.source_interaction_matrix, self.total_num_users,
                                                             self.total_num_items).to(self.device)
