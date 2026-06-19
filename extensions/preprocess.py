@@ -54,7 +54,7 @@ def main():
         target_df = target_df.rename(columns={'parent_asin': 'item_id'})
 
     # Check for the existence of minimum required columns
-    for col in ['user_id', 'item_id', 'rating']:
+    for col in ['user_id', 'item_id', 'rating', 'timestamp']:
         if col not in source_df.columns:
             raise ValueError(f"Missing column in source CSV: {col}")
         if col not in target_df.columns:
@@ -97,14 +97,14 @@ def main():
     os.makedirs(source_dir, exist_ok=True)
     os.makedirs(target_dir, exist_ok=True)
 
-    source_out = source_df[['user_id', 'item_id', 'rating']]
-    target_out = target_df[['user_id', 'item_id', 'rating']]
+    source_out = source_df[['user_id', 'item_id', 'rating', 'timestamp']]
+    target_out = target_df[['user_id', 'item_id', 'rating', 'timestamp']]
 
     source_path = os.path.join(source_dir, f"{source_dataset_name}.inter")
     target_path = os.path.join(target_dir, f"{target_dataset_name}.inter")
 
-    source_out.to_csv(source_path, sep='\t', index=False, header=["user_id:token", "item_id:token", "rating:float"])
-    target_out.to_csv(target_path, sep='\t', index=False, header=["user_id:token", "item_id:token", "rating:float"])
+    source_out.to_csv(source_path, sep='\t', index=False, header=["user_id:token", "item_id:token", "rating:float", "timestamp:float"])
+    target_out.to_csv(target_path, sep='\t', index=False, header=["user_id:token", "item_id:token", "rating:float", "timestamp:float"])
 
     print(f"\n[6/6] Generating corresponding .yaml files...")
     yaml_dir = os.path.join("recbole_cdr", "properties", "dataset")
@@ -134,6 +134,7 @@ valid_metric: Recall@20
 epochs: 400
 train_batch_size: 4096
 eval_batch_size: 40960
+time_decay_weight: 0.1
 
 #train_neg_sample_args: None
 
@@ -149,7 +150,7 @@ source_domain:
   threshold:
     rating: 4                    # (dict) 0/1 labels will be generated according to the pairs.
   load_col:
-    inter: [user_id, item_id, rating]
+    inter: [user_id, item_id, rating, timestamp]
   user_inter_num_interval: "[0,inf)"
   item_inter_num_interval: "[0,inf)"
   val_interval:
@@ -169,7 +170,7 @@ target_domain:
   threshold:
     rating: 4                    # (dict) 0/1 labels will be generated according to the pairs.
   load_col:
-    inter: [user_id, item_id, rating]
+    inter: [user_id, item_id, rating, timestamp]
   user_inter_num_interval: "[0,inf)"
   item_inter_num_interval: "[0,inf)"
   val_interval:

@@ -45,6 +45,7 @@ class DGCDR(CrossDomainRecommender):
         self.n_layers = config['n_layers']  # (int) the layer num of GCN
         self.reg_weight = config['reg_weight']  # (float) the weight decay for l2 normalization
         self.tem = config['temperature']  # (float) temperature of contrastive Loss
+        self.time_decay_weight = config['time_decay_weight'] if 'time_decay_weight' in config else 0.0
 
         self.drop_rate = config['drop_rate']  # (float) the dropout rate
         self.connect_way = config['connect_way']  # (str) the connecting way for all GCN layers
@@ -158,9 +159,10 @@ class DGCDR(CrossDomainRecommender):
         self.dropout = nn.Dropout(p=self.drop_rate)
 
         # generate intermediate data
-        self.source_interaction_matrix = dataset.inter_matrix(form='coo', value_field=None, domain='source').astype(
+        time_field = config['TIME_FIELD'] if 'TIME_FIELD' in config else 'timestamp'
+        self.source_interaction_matrix = dataset.inter_matrix(form='coo', value_field=time_field, domain='source').astype(
             np.float32)
-        self.target_interaction_matrix = dataset.inter_matrix(form='coo', value_field=None, domain='target').astype(
+        self.target_interaction_matrix = dataset.inter_matrix(form='coo', value_field=time_field, domain='target').astype(
             np.float32)
         self.source_norm_adj_matrix = self.get_norm_adj_mat(self.source_interaction_matrix, self.total_num_users,
                                                             self.total_num_items).to(self.device)
@@ -192,13 +194,31 @@ class DGCDR(CrossDomainRecommender):
         if n_users == None or n_items == None:
             n_users, n_items = interaction_matrix.shape
         A = sp.dok_matrix((n_users + n_items, n_users + n_items), dtype=np.float32)
-        inter_M = interaction_matrix
-        inter_M_t = interaction_matrix.transpose()
-        data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), [1] * inter_M.nnz))
-        data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), [1] * inter_M_t.nnz)))
+        inter_M = interaction_matrix.copy()
+        
+        # Apply time decay if configured and values are present (timestamps)
+        if self.time_decay_weight > 0 and inter_M.nnz > 0:
+            t_max = np.max(inter_M.data)
+            # Timestamps are assumed to be in milliseconds
+            # Convert milliseconds to months (1 month ~ 30.44 days)
+            ms_per_month = 1000.0 * 3600.0 * 24.0 * 30.44
+            delta_t_months = (t_max - inter_M.data) / ms_per_month
+            delta_t_months = np.maximum(delta_t_months, 0) # ensure no negative delta
+            
+            # exponential decay
+            weights = np.exp(-self.time_decay_weight * delta_t_months).astype(np.float32)
+        else:
+            weights = np.ones(inter_M.nnz, dtype=np.float32)
+            
+        inter_M.data = weights
+        inter_M_t = inter_M.transpose()
+        
+        data_dict = dict(zip(zip(inter_M.row, inter_M.col + n_users), inter_M.data))
+        data_dict.update(dict(zip(zip(inter_M_t.row + n_users, inter_M_t.col), inter_M_t.data)))
         A._update(data_dict)
         # norm adj matrix
-        sumArr = (A > 0).sum(axis=1)
+        # compute degree sum (sum of weights for each node)
+        sumArr = A.sum(axis=1)
         # add epsilon to avoid divide by zero Warning
         diag = np.array(sumArr.flatten())[0] + 1e-7
         diag = np.power(diag, -0.5)

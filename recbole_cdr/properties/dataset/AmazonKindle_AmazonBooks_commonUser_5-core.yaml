@@ -22,6 +22,7 @@ valid_metric: Recall@20
 epochs: 400
 train_batch_size: 4096
 eval_batch_size: 40960
+time_decay_weight: 0.1
 
 #train_neg_sample_args: None
 
@@ -37,7 +38,7 @@ source_domain:
   threshold:
     rating: 4                    # (dict) 0/1 labels will be generated according to the pairs.
   load_col:
-    inter: [user_id, item_id, rating]
+    inter: [user_id, item_id, rating, timestamp]
   user_inter_num_interval: "[0,inf)"
   item_inter_num_interval: "[0,inf)"
   val_interval:
@@ -57,7 +58,7 @@ target_domain:
   threshold:
     rating: 4                    # (dict) 0/1 labels will be generated according to the pairs.
   load_col:
-    inter: [user_id, item_id, rating]
+    inter: [user_id, item_id, rating, timestamp]
   user_inter_num_interval: "[0,inf)"
   item_inter_num_interval: "[0,inf)"
   val_interval:
