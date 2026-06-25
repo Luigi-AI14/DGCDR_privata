@@ -22,8 +22,8 @@ if __name__ == '__main__':
     # data_config = 'recbole_cdr/properties/dataset/AmazonCloth_AmazonSport_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/DoubanMovie_DoubanBook_commonUser_10-core.yaml'
     #data_config = 'recbole_cdr/properties/dataset/DoubanBook_DoubanMovie_commonUser_10-core.yaml'
-    data_config = 'recbole_cdr/properties/dataset/AmazonInstruments_AmazonCDs_commonUser_3-core.yaml'
-    # data_config = 'recbole_cdr/properties/dataset/AmazonCDs_AmazonInstruments_commonUser_3-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/AmazonInstruments_AmazonCDs_commonUser_3-core.yaml'
+    data_config = 'recbole_cdr/properties/dataset/AmazonCDs_AmazonInstruments_commonUser_3-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonKindle_AmazonBooks_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonBooks_AmazonKindle_commonUser_5-core.yaml'
 
@@ -32,7 +32,7 @@ if __name__ == '__main__':
     config_file_list = [overall_config, data_config, model_config]
     
     config_dict = {
-        'use_text_embeddings': False,
+        'use_text_embeddings': True,
         'time_decay_weight': 0.0
     }
 

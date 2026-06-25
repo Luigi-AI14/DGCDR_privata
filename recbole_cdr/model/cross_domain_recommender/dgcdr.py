@@ -70,12 +70,6 @@ class DGCDR(CrossDomainRecommender):
         
         if self.use_text_embeddings:
             self.text_dim = 384
-            # Projector: 384 -> embedding_size
-            self.text_projector = nn.Sequential(
-                nn.Linear(self.text_dim, self.embedding_size),
-                nn.ReLU(),
-                nn.Linear(self.embedding_size, self.embedding_size)
-            ).to(self.device)
             self.semantic_loss_func = nn.MSELoss()
             
             # Load text embeddings
@@ -197,6 +191,14 @@ class DGCDR(CrossDomainRecommender):
                                                            activation=activation_func)
 
             self.sim_loss = torch.nn.CosineEmbeddingLoss(margin=0.5)
+            
+        if hasattr(self, 'use_text_embeddings') and self.use_text_embeddings:
+            target_dim = mlp_hidden_size[-1] if type(mlp_hidden_size) is list else mlp_hidden_size
+            self.text_projector = nn.Sequential(
+                nn.Linear(self.text_dim, target_dim),
+                nn.ReLU(),
+                nn.Linear(target_dim, target_dim)
+            ).to(self.device)
 
         self.rec_loss = None
         if self.loss_type == 'BPR':
