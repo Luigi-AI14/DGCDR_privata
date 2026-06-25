@@ -1,4 +1,4 @@
-seed: 2022
+seed: 42
 field_separator: "\t"
 #save_dataloaders: True
 #save_dataset: True

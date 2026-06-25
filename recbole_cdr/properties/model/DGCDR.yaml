@@ -30,6 +30,8 @@ item_negative: True  # (bool) whether to apply item contrastive disentanglement
 item_disentangle: True  # (bool) whether to apply disentanglement and fusion to item
 preference_disentangle: True  # (bool) whether to disentangle features after GNN
 
-
-
-
+# --- TEXT EMBEDDINGS CONFIGURATION ---
+use_text_embeddings: True # Enable/disable textual semantic alignment
+semantic_loss_weight: 0.1 # Weight of the semantic alignment MSE Loss
+source_text_pt_path: 'extensions/offline_extraction/embeddings/text_embeddings_Musical_Instruments.pt'
+target_text_pt_path: 'extensions/offline_extraction/embeddings/text_embeddings_CDs_and_Vinyl.pt'

@@ -63,6 +63,55 @@ class DGCDR(CrossDomainRecommender):
         self.item_cl_weight = config['item_cl_weight']  # (float) weights of item disentanglement loss
         self.item_mapping = config['item_mapping']  # (bool) whether to use a non-linear mapping for item
         self.item_disentangle = config['item_disentangle']  # (bool) whether to apply disentanglement and fusion to item
+        
+        # --- TEXT EMBEDDING CONFIG ---
+        self.use_text_embeddings = config['use_text_embeddings'] if 'use_text_embeddings' in config else False
+        self.semantic_loss_weight = config['semantic_loss_weight'] if 'semantic_loss_weight' in config else 0.1
+        
+        if self.use_text_embeddings:
+            self.text_dim = 384
+            # Projector: 384 -> embedding_size
+            self.text_projector = nn.Sequential(
+                nn.Linear(self.text_dim, self.embedding_size),
+                nn.ReLU(),
+                nn.Linear(self.embedding_size, self.embedding_size)
+            ).to(self.device)
+            self.semantic_loss_func = nn.MSELoss()
+            
+            # Load text embeddings
+            source_dict_path = config['source_text_pt_path'] if 'source_text_pt_path' in config else ''
+            target_dict_path = config['target_text_pt_path'] if 'target_text_pt_path' in config else ''
+            
+            source_dict = torch.load(source_dict_path, map_location='cpu') if source_dict_path else {}
+            target_dict = torch.load(target_dict_path, map_location='cpu') if target_dict_path else {}
+            
+            # Initialize matrix
+            self.text_embedding_matrix = torch.zeros((self.total_num_items, self.text_dim), device=self.device)
+            
+            mapped_count = 0
+            for i in range(1, self.total_num_items):
+                token = None
+                if i < self.target_num_items:
+                    try:
+                        token = dataset.target_domain_dataset.id2token(dataset.target_domain_dataset.iid_field, i)
+                    except: pass
+                if token is None:
+                    try:
+                        token = dataset.source_domain_dataset.id2token(dataset.source_domain_dataset.iid_field, i)
+                    except: pass
+                    
+                if token is not None:
+                    if token in source_dict:
+                        self.text_embedding_matrix[i] = source_dict[token].to(self.device)
+                        mapped_count += 1
+                    elif token in target_dict:
+                        self.text_embedding_matrix[i] = target_dict[token].to(self.device)
+                        mapped_count += 1
+            
+            print(f"[DGCDR Text Embeddings] Mapped {mapped_count} / {self.total_num_items} items.")
+            self.text_embedding_matrix.requires_grad = False
+        # -----------------------------
+        
         self.feature_mapping_way = config[
             'feature_mapping_way']  # (str) way of feature separation in encoder and mapping network in decoder. projection/ mlp (for comparison).
         mlp_hidden_size = config['mlp_hidden_size']  # (int) hidden size of feature mapping
@@ -404,7 +453,7 @@ class DGCDR(CrossDomainRecommender):
             target_update_item_embeddings = self.fuse_and_update(target_common_feature,
                                                                  target_specific_feature,
                                                                  target_embeddings)
-            return source_update_item_embeddings, target_update_item_embeddings
+            return source_update_item_embeddings, target_update_item_embeddings, [source_common_feature, target_common_feature, source_specific_feature, target_specific_feature]
 
     def forward(self):
         source_all_embeddings, source_norm_adj_matrix = self.get_ego_embeddings(domain='source')
@@ -436,9 +485,10 @@ class DGCDR(CrossDomainRecommender):
         if self.preference_disentangle:
             source_user_embeddings, target_user_embeddings, user_disentangled_list = self.disentangle_layer(
                 source_user_embeddings, target_user_embeddings)
+            item_disentangled_list = []
             if self.item_disentangle:
                 # Use the same disentanglement for item
-                source_item_embeddings, target_item_embeddings = self.disentangle_layer(source_item_embeddings,
+                source_item_embeddings, target_item_embeddings, item_disentangled_list = self.disentangle_layer(source_item_embeddings,
                                                                                         target_item_embeddings, False)
             elif self.item_mapping:
                 # Use non-linear mappings for item
@@ -448,8 +498,9 @@ class DGCDR(CrossDomainRecommender):
                     self.target_item_mapping_layer(target_item_embeddings))
         else:
             user_disentangled_list = []
+            item_disentangled_list = []
 
-        return user_disentangled_list, source_user_embeddings, source_item_embeddings, target_user_embeddings, target_item_embeddings
+        return user_disentangled_list, item_disentangled_list, source_user_embeddings, source_item_embeddings, target_user_embeddings, target_item_embeddings
 
     # decoder loss in Eq.(11)
     def decoder_loss_function(self, sr_user, tg_de_user, tg_de_c, tg_de_s, t):
@@ -481,7 +532,7 @@ class DGCDR(CrossDomainRecommender):
 
     def calculate_loss(self, interaction):
         self.init_restore_e()
-        user_disentangled_list, source_user_all_embeddings, source_item_all_embeddings, target_user_all_embeddings, target_item_all_embeddings = self.forward()
+        user_disentangled_list, item_disentangled_list, source_user_all_embeddings, source_item_all_embeddings, target_user_all_embeddings, target_item_all_embeddings = self.forward()
         
         losses = []
         if self.loss_type == 'BCE':
@@ -615,11 +666,30 @@ class DGCDR(CrossDomainRecommender):
                 tg_item_loss = self.item_disentangle_loss(tg_common_s, tg_sr_user_specific_e, tg_item_e, self.tem)
                 losses.extend(self.item_cl_weight * loss for loss in [sr_item_loss, tg_item_loss])
 
+        # --- SEMANTIC ALIGNMENT LOSS ---
+        if hasattr(self, 'use_text_embeddings') and self.use_text_embeddings and len(item_disentangled_list) > 0:
+            source_item = interaction[self.SOURCE_ITEM_ID]
+            target_item = interaction[self.TARGET_ITEM_ID]
+            
+            sr_common_feature_all = item_disentangled_list[0]
+            tg_common_feature_all = item_disentangled_list[1]
+            
+            # Project text embeddings for the batch
+            sr_text_proj = self.text_projector(self.text_embedding_matrix[source_item])
+            tg_text_proj = self.text_projector(self.text_embedding_matrix[target_item])
+            
+            # Compare with graph common feature
+            semantic_loss_sr = self.semantic_loss_func(sr_text_proj, sr_common_feature_all[source_item])
+            semantic_loss_tg = self.semantic_loss_func(tg_text_proj, tg_common_feature_all[target_item])
+            
+            losses.append(self.semantic_loss_weight * (semantic_loss_sr + semantic_loss_tg))
+        # -------------------------------
+
         return tuple(losses)
 
     def predict(self, interaction):
         result = []
-        user_disentangled_list, _, _, target_user_embeddings, target_item_embeddings = self.forward()
+        user_disentangled_list, _, _, _, target_user_embeddings, target_item_embeddings = self.forward()
         user = interaction[self.TARGET_USER_ID]
         item = interaction[self.TARGET_ITEM_ID]
 
@@ -646,5 +716,5 @@ class DGCDR(CrossDomainRecommender):
 
     def get_restore_e(self):
         if self.target_restore_user_e is None or self.target_restore_item_e is None:
-            _, _, _, self.target_restore_user_e, self.target_restore_item_e = self.forward()
+            _, _, _, _, self.target_restore_user_e, self.target_restore_item_e = self.forward()
         return self.target_restore_user_e, self.target_restore_item_e
