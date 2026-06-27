@@ -4,10 +4,10 @@ import os
 import time
 
 # === DEFAULT CONFIGURATION ===
-DEFAULT_SOURCE_CSV = 'csv_datasets/Kindle_Store.csv'
-DEFAULT_TARGET_CSV = 'csv_datasets/Books.csv'
-DEFAULT_SOURCE_NAME = 'AmazonKindle'
-DEFAULT_TARGET_NAME = 'AmazonBooks'
+DEFAULT_SOURCE_CSV = 'csv_datasets/google_hotels.csv'
+DEFAULT_TARGET_CSV = 'csv_datasets/google_restaurants.csv'
+DEFAULT_SOURCE_NAME = 'GoogleHotels'
+DEFAULT_TARGET_NAME = 'GoogleRestaurants'
 DEFAULT_K_CORE = 5
 DEFAULT_OUT_DIR = 'dataset'
 # =============================

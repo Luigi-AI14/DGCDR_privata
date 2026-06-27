@@ -7,3 +7,6 @@ log_tensorboard/
 *.pt
 *.pth
 *.jsonl
+*.json
+json_datasets/
+test.py

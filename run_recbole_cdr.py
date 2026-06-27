@@ -21,18 +21,22 @@ if __name__ == '__main__':
     # data_config = 'recbole_cdr/properties/dataset/AmazonSport_AmazonCloth_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonCloth_AmazonSport_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/DoubanMovie_DoubanBook_commonUser_10-core.yaml'
-    #data_config = 'recbole_cdr/properties/dataset/DoubanBook_DoubanMovie_commonUser_10-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/DoubanBook_DoubanMovie_commonUser_10-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonInstruments_AmazonCDs_commonUser_3-core.yaml'
-    data_config = 'recbole_cdr/properties/dataset/AmazonCDs_AmazonInstruments_commonUser_3-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/AmazonCDs_AmazonInstruments_commonUser_3-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonKindle_AmazonBooks_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonBooks_AmazonKindle_commonUser_5-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/YelpHotels_YelpRestaurants_commonUser_5-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/YelpRestaurants_YelpHotels_commonUser_5-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/YelpHotels_YelpRestaurants_commonUser_3-core.yaml'
+    data_config = 'recbole_cdr/properties/dataset/GoogleRestaurants_GoogleHotels_commonUser_5-core.yaml'
 
     model_config = 'recbole_cdr/properties/model/' + model_Name + '.yaml'
 
     config_file_list = [overall_config, data_config, model_config]
     
     config_dict = {
-        'use_text_embeddings': True,
+        'use_text_embeddings': False,
         'time_decay_weight': 0.0
     }
 
