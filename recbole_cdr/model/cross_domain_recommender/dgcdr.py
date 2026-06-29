@@ -4,6 +4,7 @@ import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.utils.rnn as rnn_utils
 
 from recbole_cdr.model.crossdomain_recommender import CrossDomainRecommender
 from recbole.model.init import xavier_normal_initialization, xavier_normal_
@@ -46,6 +47,8 @@ class DGCDR(CrossDomainRecommender):
         self.reg_weight = config['reg_weight']  # (float) the weight decay for l2 normalization
         self.tem = config['temperature']  # (float) temperature of contrastive Loss
         self.time_decay_weight = config['time_decay_weight'] if 'time_decay_weight' in config else 0.0
+        self.max_seq_len = config['max_seq_len'] if 'max_seq_len' in config else 50
+        self.alpha = config['alpha'] if 'alpha' in config else 0.5
 
         self.drop_rate = config['drop_rate']  # (float) the dropout rate
         self.connect_way = config['connect_way']  # (str) the connecting way for all GCN layers
@@ -228,6 +231,28 @@ class DGCDR(CrossDomainRecommender):
                                                             self.total_num_items).to(self.device)
         self.target_norm_adj_matrix = self.get_norm_adj_mat(self.target_interaction_matrix, self.total_num_users,
                                                             self.total_num_items).to(self.device)
+
+        # Build user histories
+        self.source_history_seq, self.source_history_len = self._build_user_history(
+            dataset.source_domain_dataset, self.total_num_users
+        )
+        self.target_history_seq, self.target_history_len = self._build_user_history(
+            dataset.target_domain_dataset, self.total_num_users
+        )
+
+        # Initialize GRU encoders
+        self.source_seq_encoder = nn.GRU(
+            input_size=en_input_size[0],
+            hidden_size=en_input_size[0],
+            num_layers=1,
+            batch_first=True
+        )
+        self.target_seq_encoder = nn.GRU(
+            input_size=en_input_size[0],
+            hidden_size=en_input_size[0],
+            num_layers=1,
+            batch_first=True
+        )
 
         # storage variables for full sort evaluation acceleration
         self.target_restore_user_e = None
@@ -484,6 +509,19 @@ class DGCDR(CrossDomainRecommender):
         target_user_embeddings, target_item_embeddings = torch.split(target_lightgcn_all_embeddings,
                                                                      [self.total_num_users,
                                                                       self.total_num_items])
+
+        # Compute dynamic user embeddings using GRU
+        source_dynamic_user = self._get_seq_embeddings(
+            source_item_embeddings, self.source_history_seq, self.source_history_len, self.source_seq_encoder
+        )
+        target_dynamic_user = self._get_seq_embeddings(
+            target_item_embeddings, self.target_history_seq, self.target_history_len, self.target_seq_encoder
+        )
+
+        # Fuse static GNN embeddings and dynamic sequential ones
+        source_user_embeddings = self.alpha * source_user_embeddings + (1 - self.alpha) * source_dynamic_user
+        target_user_embeddings = self.alpha * target_user_embeddings + (1 - self.alpha) * target_dynamic_user
+
         if self.preference_disentangle:
             source_user_embeddings, target_user_embeddings, user_disentangled_list = self.disentangle_layer(
                 source_user_embeddings, target_user_embeddings)
@@ -720,3 +758,52 @@ class DGCDR(CrossDomainRecommender):
         if self.target_restore_user_e is None or self.target_restore_item_e is None:
             _, _, _, _, self.target_restore_user_e, self.target_restore_item_e = self.forward()
         return self.target_restore_user_e, self.target_restore_item_e
+
+    def _build_user_history(self, domain_dataset, total_users):
+        uid_field = domain_dataset.uid_field
+        iid_field = domain_dataset.iid_field
+        time_field = domain_dataset.time_field
+
+        uids = domain_dataset.inter_feat[uid_field].numpy()
+        iids = domain_dataset.inter_feat[iid_field].numpy()
+
+        if time_field in domain_dataset.inter_feat:
+            times = domain_dataset.inter_feat[time_field].numpy()
+        else:
+            times = np.arange(len(uids))
+
+        from collections import defaultdict
+        user_history_dict = defaultdict(list)
+        for u, i, t in zip(uids, iids, times):
+            user_history_dict[u].append((t, i))
+
+        history_seq = np.zeros((total_users, self.max_seq_len), dtype=np.int64)
+        history_len = np.zeros(total_users, dtype=np.int64)
+
+        for u in range(total_users):
+            if u in user_history_dict:
+                sorted_items = [item for _, item in sorted(user_history_dict[u], key=lambda x: x[0])]
+                seq = sorted_items[-self.max_seq_len:]
+                history_seq[u, :len(seq)] = seq
+                history_len[u] = len(seq)
+
+        return torch.LongTensor(history_seq).to(self.device), torch.LongTensor(history_len).to(self.device)
+
+    def _get_seq_embeddings(self, item_embeddings, history_seq, history_len, seq_encoder):
+        seq_embeddings = item_embeddings[history_seq]
+        seq_embeddings[history_seq == 0] = 0.0
+
+        lens_clamped = torch.clamp(history_len, min=1).cpu()
+
+        packed_seq = rnn_utils.pack_padded_sequence(
+            seq_embeddings,
+            lens_clamped,
+            batch_first=True,
+            enforce_sorted=False
+        )
+
+        _, hn = seq_encoder(packed_seq)
+        dynamic_embeddings = hn.squeeze(0)
+
+        dynamic_embeddings[history_len == 0] = 0.0
+        return dynamic_embeddings
