@@ -338,7 +338,7 @@ class DGCDR(CrossDomainRecommender):
         return new_embeddings
 
     # feature fusion and update
-    def fuse_and_update(self, common_preference, specific_preference, user_embeddings):
+    def fuse_and_update(self, common_preference, specific_preference, user_embeddings, dynamic_user_embeddings=None):
         if self.fuse_mode == 'concat':
             if self.concat_mode == 'all':
                 user_all_embeddings = self.mapping(
@@ -347,13 +347,16 @@ class DGCDR(CrossDomainRecommender):
                 user_all_embeddings = self.mapping(torch.cat((common_preference, specific_preference), -1))
 
         elif self.fuse_mode == 'attention':
-            a_1 = torch.sum(torch.mul(user_embeddings, common_preference), dim=1)  # [B]
-            a_2 = torch.sum(torch.mul(user_embeddings, specific_preference), dim=1)
+            # Use dynamic sequential embedding as query if available (Dynamic Intent Routing)
+            query = dynamic_user_embeddings if dynamic_user_embeddings is not None else user_embeddings
+            
+            a_1 = torch.sum(torch.mul(query, common_preference), dim=1)  # [B]
+            a_2 = torch.sum(torch.mul(query, specific_preference), dim=1)
 
             b_1 = a_1.unsqueeze(1)
             b_2 = a_2.unsqueeze(1)
 
-            scale = np.sqrt(user_embeddings.shape[-1])
+            scale = np.sqrt(query.shape[-1])
             att = torch.cat((b_1, b_2), dim=1) / scale
             softed_att = F.softmax(att, dim=1)
 
@@ -374,12 +377,22 @@ class DGCDR(CrossDomainRecommender):
         return user_all_embeddings
 
     # Feature disentanglement to generate domain-shared & domain-specific features
-    def disentangle_layer(self, source_embeddings, target_embeddings, is_user=True):
+    def disentangle_layer(self, source_embeddings, target_embeddings, is_user=True,
+                          source_dynamic_users=None, target_dynamic_users=None):
         if is_user:
             if self.overlapped_num_users > 1:
                 # non-overlapping users
                 source_independent_user_embeddings = source_embeddings[self.overlapped_num_users:]
                 target_independent_user_embeddings = target_embeddings[self.overlapped_num_users:]
+                
+                # Apply linear GNN + GRU fusion for non-overlapping users (since they have no intents to route)
+                if source_dynamic_users is not None:
+                    source_ind_dyn = source_dynamic_users[self.overlapped_num_users:]
+                    source_independent_user_embeddings = self.alpha * source_independent_user_embeddings + (1 - self.alpha) * source_ind_dyn
+                if target_dynamic_users is not None:
+                    target_ind_dyn = target_dynamic_users[self.overlapped_num_users:]
+                    target_independent_user_embeddings = self.alpha * target_independent_user_embeddings + (1 - self.alpha) * target_ind_dyn
+
                 # overlapping users for disentanglement
                 source_overlap_users = source_embeddings[:self.overlapped_num_users]
                 target_overlap_users = target_embeddings[:self.overlapped_num_users]
@@ -427,13 +440,19 @@ class DGCDR(CrossDomainRecommender):
                     target_decode_common = self.target_de_layers(target_common_preference)
                     target_decode_specific = self.target_de_layers(target_specific_preference)
 
-                # 3. feature fusion and update
+                # Extract dynamic overlaps
+                source_dynamic_overlap = source_dynamic_users[:self.overlapped_num_users] if source_dynamic_users is not None else None
+                target_dynamic_overlap = target_dynamic_users[:self.overlapped_num_users] if target_dynamic_users is not None else None
+
+                # 3. feature fusion and update (Dynamic Intent Routing)
                 source_update_overlap_user_embeddings = self.fuse_and_update(source_common_preference,
                                                                              source_specific_preference,
-                                                                             source_overlap_users)
+                                                                             source_overlap_users,
+                                                                             source_dynamic_overlap)
                 target_update_overlap_user_embeddings = self.fuse_and_update(target_common_preference,
                                                                              target_specific_preference,
-                                                                             target_overlap_users)
+                                                                             target_overlap_users,
+                                                                             target_dynamic_overlap)
 
                 source_all_user_embeddings = torch.cat(
                     [source_update_overlap_user_embeddings, source_independent_user_embeddings], dim=0)
@@ -518,13 +537,10 @@ class DGCDR(CrossDomainRecommender):
             target_item_embeddings, self.target_history_seq, self.target_history_len, self.target_seq_encoder
         )
 
-        # Fuse static GNN embeddings and dynamic sequential ones
-        source_user_embeddings = self.alpha * source_user_embeddings + (1 - self.alpha) * source_dynamic_user
-        target_user_embeddings = self.alpha * target_user_embeddings + (1 - self.alpha) * target_dynamic_user
-
         if self.preference_disentangle:
             source_user_embeddings, target_user_embeddings, user_disentangled_list = self.disentangle_layer(
-                source_user_embeddings, target_user_embeddings)
+                source_user_embeddings, target_user_embeddings, is_user=True,
+                source_dynamic_users=source_dynamic_user, target_dynamic_users=target_dynamic_user)
             item_disentangled_list = []
             if self.item_disentangle:
                 # Use the same disentanglement for item
