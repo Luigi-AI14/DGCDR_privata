@@ -91,7 +91,7 @@ def main():
     
     # Load the model
     print("Loading sentence-transformers model...")
-    model = SentenceTransformer('all-MiniLM-L6-v2')
+    model = SentenceTransformer('all-mpnet-base-v2')
     
     # Datasets to process
     datasets = [
