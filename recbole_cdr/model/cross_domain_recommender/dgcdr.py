@@ -137,6 +137,22 @@ class DGCDR(CrossDomainRecommender):
             en_input_size = [self.embedding_size * (self.n_layers + 1)]
         elif self.connect_way == 'mean':
             en_input_size = [config['embedding_size']]
+            
+        # CLUB networks for conditional density estimation
+        club_hidden_size = config['mlp_hidden_size'][0] if isinstance(config['mlp_hidden_size'], list) else config['mlp_hidden_size']
+        club_input_size = en_input_size[0]
+        self.source_club_mu = nn.Sequential(
+            nn.Linear(club_input_size, club_hidden_size), nn.ReLU(), nn.Linear(club_hidden_size, club_input_size)
+        )
+        self.source_club_var = nn.Sequential(
+            nn.Linear(club_input_size, club_hidden_size), nn.ReLU(), nn.Linear(club_hidden_size, club_input_size)
+        )
+        self.target_club_mu = nn.Sequential(
+            nn.Linear(club_input_size, club_hidden_size), nn.ReLU(), nn.Linear(club_hidden_size, club_input_size)
+        )
+        self.target_club_var = nn.Sequential(
+            nn.Linear(club_input_size, club_hidden_size), nn.ReLU(), nn.Linear(club_hidden_size, club_input_size)
+        )
 
         if self.preference_disentangle:
             if self.feature_mapping_way == 'projection':
@@ -504,6 +520,33 @@ class DGCDR(CrossDomainRecommender):
 
         return user_disentangled_list, item_disentangled_list, source_user_embeddings, source_item_embeddings, target_user_embeddings, target_item_embeddings
 
+    def get_club_log_q(self, s, mu, logvar):
+        # Clamp logvar to prevent division by zero / exploding gradients
+        logvar = torch.clamp(logvar, -5, 5)
+        # log q(s|c) for a Gaussian distribution
+        return -0.5 * torch.sum(logvar + (s - mu)**2 / logvar.exp() + np.log(2*np.pi), dim=1)
+
+    def club_loss(self, c, s, mu_net, var_net):
+        # 1. NLL Loss (Trains ONLY the CLUB networks)
+        mu_detached = mu_net(c.detach())
+        logvar_detached = var_net(c.detach())
+        log_q_pos_nll = self.get_club_log_q(s.detach(), mu_detached, logvar_detached)
+        club_nll_loss = -torch.mean(log_q_pos_nll)
+
+        # 2. MI Bound (Trains ONLY the main encoder)
+        mu = mu_net(c)
+        logvar = var_net(c)
+        log_q_pos = self.get_club_log_q(s, mu, logvar)
+        
+        # Shuffle s to create negative samples (conditional independence)
+        s_perm = s[torch.randperm(s.size(0))]
+        log_q_neg = self.get_club_log_q(s_perm, mu, logvar)
+        
+        mi_bound = torch.mean(log_q_pos - log_q_neg)
+        mi_bound = torch.clamp(mi_bound, min=0.0)
+
+        return club_nll_loss, mi_bound
+
     # decoder loss in Eq.(11)
     def decoder_loss_function(self, sr_user, tg_de_user, tg_de_c, tg_de_s, t):
         sr = F.normalize(sr_user, dim=1)
@@ -534,6 +577,7 @@ class DGCDR(CrossDomainRecommender):
 
     def calculate_loss(self, interaction):
         self.init_restore_e()
+        club_total_nll = torch.tensor(0.0, device=self.device)
         user_disentangled_list, item_disentangled_list, source_user_all_embeddings, source_item_all_embeddings, target_user_all_embeddings, target_item_all_embeddings = self.forward()
         
         losses = []
@@ -632,13 +676,16 @@ class DGCDR(CrossDomainRecommender):
             # Encoder alignment loss
             L_sim = sr_L_sim + tg_L_sim
             losses.append(self.cl_sim_weight * L_sim)
-            # Encoder orthogonality loss
+            # Encoder vCLUB Mutual Information Bound Loss
             if self.cl_org_weight != 0:
-                sr_L_ort_cs = torch.mean(torch.sum(torch.mul(sr_common_c, sr_common_s), dim=1) ** 2,
-                                         dim=0)  # force public and specific features to separate from each other
-                tg_L_ort_cs = torch.mean(torch.sum(torch.mul(tg_common_c, tg_common_s), dim=1) ** 2,
-                                         dim=0)  # force public and specific features to separate from each other
-                losses.extend(self.cl_org_weight * loss for loss in [sr_L_ort_cs, tg_L_ort_cs])
+                # Source Domain: Use CLUB network to estimate and minimize MI between common and specific features
+                sr_club_nll, sr_mi_bound = self.club_loss(sr_common_c, sr_common_s, self.source_club_mu, self.source_club_var)
+
+                # Target Domain: Use CLUB network to estimate and minimize MI between common and specific features
+                tg_club_nll, tg_mi_bound = self.club_loss(tg_common_c, tg_common_s, self.target_club_mu, self.target_club_var)
+
+                club_total_nll = sr_club_nll + tg_club_nll
+                losses.extend([self.cl_org_weight * sr_mi_bound, self.cl_org_weight * tg_mi_bound])
 
             # Decoder loss
             if self.cl_decoder_weight != 0:
@@ -687,6 +734,7 @@ class DGCDR(CrossDomainRecommender):
             losses.append(self.semantic_loss_weight * (semantic_loss_sr + semantic_loss_tg))
         # -------------------------------
 
+        losses.append(club_total_nll)
         return tuple(losses)
 
     def predict(self, interaction):

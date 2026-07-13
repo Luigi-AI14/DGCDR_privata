@@ -5,6 +5,7 @@ recbole_cdr.trainer.trainer
 """
 
 import numpy as np
+import torch
 from recbole.trainer import Trainer
 from recbole_cdr.utils import train_mode2state
 
@@ -128,3 +129,86 @@ class DCDCSRTrainer(Trainer):
 
         self.model.set_phase('OVERLAP')
         return self.best_valid_score, self.best_valid_result
+
+class DGCDRTrainer(CrossDomainTrainer):
+    r"""Trainer for training DGCDR models with a separate CLUB optimizer."""
+
+    def _build_optimizer(self, **kwargs):
+        # 1. Main optimizer (excluding CLUB networks)
+        main_params = []
+        club_params = []
+        for name, param in self.model.named_parameters():
+            if 'club_' in name:
+                club_params.append(param)
+            else:
+                main_params.append(param)
+                
+        main_optimizer = torch.optim.Adam(main_params, lr=self.config['learning_rate'])
+        
+        # 2. Inject CLUB optimizer into the model
+        self.model.club_optimizer = torch.optim.Adam(club_params, lr=self.config['learning_rate'] * 0.1, weight_decay=1e-4)
+        
+        return main_optimizer
+
+    def _train_epoch(self, train_data, epoch_idx, loss_func=None, show_progress=False):
+        from recbole.utils import set_color, get_gpu_usage
+        from torch.nn.utils.clip_grad import clip_grad_norm_
+        from tqdm import tqdm
+
+        self.model.train()
+        loss_func = loss_func or self.model.calculate_loss
+        total_loss = None
+        iter_data = (
+            tqdm(
+                train_data,
+                total=len(train_data),
+                ncols=100,
+                desc=set_color(f"Train {epoch_idx:>5}", 'pink'),
+            ) if show_progress else train_data
+        )
+        for batch_idx, interaction in enumerate(iter_data):
+            interaction = interaction.to(self.device)
+            self.optimizer.zero_grad()
+            if hasattr(self.model, 'club_optimizer'):
+                self.model.club_optimizer.zero_grad()
+            
+            losses = loss_func(interaction)
+            
+            if hasattr(self.model, 'club_optimizer'):
+                club_loss = losses[-1]
+                main_losses = losses[:-1]
+            else:
+                club_loss = None
+                main_losses = losses
+                
+            if isinstance(main_losses, tuple):
+                loss = sum(main_losses)
+                loss_tuple = tuple(per_loss.item() for per_loss in main_losses)
+                if club_loss is not None:
+                    loss_tuple = loss_tuple + (club_loss.item(),)
+                total_loss = loss_tuple if total_loss is None else tuple(map(sum, zip(total_loss, loss_tuple)))
+            else:
+                loss = main_losses
+                if club_loss is not None:
+                    loss_tuple = (main_losses.item(), club_loss.item())
+                    total_loss = loss_tuple if total_loss is None else tuple(map(sum, zip(total_loss, loss_tuple)))
+                else:
+                    total_loss = main_losses.item() if total_loss is None else total_loss + main_losses.item()
+                
+            self._check_nan(loss)
+            
+            if club_loss is not None:
+                club_loss.backward(retain_graph=True)
+                
+            loss.backward()
+            
+            if self.clip_grad_norm:
+                clip_grad_norm_(self.model.parameters(), **self.clip_grad_norm)
+                
+            self.optimizer.step()
+            if club_loss is not None:
+                self.model.club_optimizer.step()
+            
+            if self.gpu_available and show_progress:
+                iter_data.set_postfix_str(set_color('GPU RAM: ' + get_gpu_usage(self.device), 'yellow'))
+        return total_loss

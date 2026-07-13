@@ -12,6 +12,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', '-m', type=str, default=model_Name, help='name of models')
     parser.add_argument('--config_files', type=str, default=None, help='config files')
+    parser.add_argument('--seed', type=int, default=2022, help='random seed')
 
     args, _ = parser.parse_known_args()
     overall_config = 'recbole_cdr/properties/overall.yaml'
@@ -26,10 +27,9 @@ if __name__ == '__main__':
     # data_config = 'recbole_cdr/properties/dataset/AmazonCDs_AmazonInstruments_commonUser_3-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonKindle_AmazonBooks_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/AmazonBooks_AmazonKindle_commonUser_5-core.yaml'
-    # data_config = 'recbole_cdr/properties/dataset/YelpHotels_YelpRestaurants_commonUser_5-core.yaml'
+    data_config = 'recbole_cdr/properties/dataset/YelpHotels_YelpRestaurants_commonUser_5-core.yaml'
     # data_config = 'recbole_cdr/properties/dataset/YelpRestaurants_YelpHotels_commonUser_5-core.yaml'
-    # data_config = 'recbole_cdr/properties/dataset/YelpHotels_YelpRestaurants_commonUser_3-core.yaml'
-    data_config = 'recbole_cdr/properties/dataset/GoogleRestaurants_GoogleHotels_commonUser_5-core.yaml'
+    # data_config = 'recbole_cdr/properties/dataset/GoogleRestaurants_GoogleHotels_commonUser_5-core.yaml'
 
     model_config = 'recbole_cdr/properties/model/' + model_Name + '.yaml'
 
@@ -37,7 +37,8 @@ if __name__ == '__main__':
     
     config_dict = {
         'use_text_embeddings': False,
-        'time_decay_weight': 0.0
+        'time_decay_weight': 0.0,
+        'seed': args.seed
     }
 
     run_recbole_cdr(model=args.model, config_file_list=config_file_list, config_dict=config_dict)
