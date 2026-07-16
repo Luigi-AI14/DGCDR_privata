@@ -697,8 +697,9 @@ class DGCDR(CrossDomainRecommender):
             if dist_dict:
                 def kl_div(logvar):
                     if len(logvar) == 0: return torch.tensor(0.0).to(logvar.device)
-                    # Removed mu.pow(2) so we don't penalize the magnitude of the CF embeddings
-                    return -0.5 * torch.mean(torch.sum(1 + logvar - logvar.exp(), dim=1))
+                    # Information Bottleneck formulation: penalize low variance (high certainty)
+                    # so the network is forced to balance it against the BPR loss.
+                    return -0.5 * torch.mean(torch.sum(logvar, dim=1))
                 
                 is_sr_common_user = (source_user >= 0) & (source_user < self.overlapped_num_users)
                 is_tg_common_user = (target_user >= 0) & (target_user < self.overlapped_num_users)
