@@ -46,6 +46,7 @@ class DGCDR(CrossDomainRecommender):
         self.reg_weight = config['reg_weight']  # (float) the weight decay for l2 normalization
         self.tem = config['temperature']  # (float) temperature of contrastive Loss
         self.time_decay_weight = config['time_decay_weight'] if 'time_decay_weight' in config else 0.0
+        self.beta_kl = config['beta_kl'] if 'beta_kl' in config else 0.001
 
         self.drop_rate = config['drop_rate']  # (float) the dropout rate
         self.connect_way = config['connect_way']  # (str) the connecting way for all GCN layers
@@ -142,27 +143,29 @@ class DGCDR(CrossDomainRecommender):
             if self.feature_mapping_way == 'projection':
                 mlp_hidden_size = en_input_size
                 # for users
-                self.source_en_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                         activation='none')
-                self.source_en_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                           activation='none')
-                self.source_de_layers = MLPLayers(mlp_hidden_size + en_input_size, self.drop_rate,
-                                                  activation='none')
-                self.target_en_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                         activation='none')
-                self.target_en_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                           activation='none')
-                self.target_de_layers = MLPLayers(mlp_hidden_size + en_input_size, self.drop_rate,
-                                                  activation='none')
+                self.source_en_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.source_en_common_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.source_en_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.source_en_specific_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                
+                self.source_de_layers = MLPLayers(mlp_hidden_size + en_input_size, self.drop_rate, activation='none')
+                
+                self.target_en_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.target_en_common_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.target_en_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.target_en_specific_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                
+                self.target_de_layers = MLPLayers(mlp_hidden_size + en_input_size, self.drop_rate, activation='none')
                 # for items
-                self.source_en_item_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                              activation='none')
-                self.source_en_item_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                                activation='none')
-                self.target_en_item_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                              activation='none')
-                self.target_en_item_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
-                                                                activation='none')
+                self.source_en_item_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.source_en_item_common_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.source_en_item_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.source_en_item_specific_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                
+                self.target_en_item_common_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.target_en_item_common_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.target_en_item_specific_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
+                self.target_en_item_specific_logvar_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate, activation='none')
             elif self.feature_mapping_way == 'mlp':
                 # for users
                 self.source_en_layers = MLPLayers(en_input_size + mlp_hidden_size, self.drop_rate,
@@ -312,8 +315,42 @@ class DGCDR(CrossDomainRecommender):
         new_embeddings = self.dropout(new_embeddings)
         return new_embeddings
 
+    def _sample_latent(self, mu_layer, logvar_layer, x):
+        if logvar_layer is None:
+            mu_w = torch.sigmoid(mu_layer(x))
+            mu = x * mu_w
+            return mu, mu, torch.zeros_like(mu), torch.ones_like(mu)
+
+        if self.training and x.requires_grad:
+            import torch.utils.checkpoint as checkpoint
+            def custom_forward(x_in):
+                mu = x_in * torch.sigmoid(mu_layer(x_in))
+                # Mathematical Fix: Clamp logvar to prevent Variance Collapse
+                # The BPR loss will naturally try to drive logvar to -infinity to remove noise.
+                # By bounding it at -5, we force a minimum baseline noise (std ≈ 0.08) 
+                # that acts as a permanent regularizer and prevents the KL divergence from exploding.
+                logvar = torch.clamp(logvar_layer(x_in), min=-5.0, max=5.0)
+                std = torch.exp(logvar * 0.5)
+                return mu, logvar, std
+            
+            # Use checkpointing to drastically reduce VRAM overhead of intermediate activations
+            # when processing the entire 72,000 node graph.
+            mu, logvar, std = checkpoint.checkpoint(custom_forward, x, use_reentrant=False)
+            # Use Multiplicative Noise (Variational Dropout) 
+            # so the network cannot cheat by inflating `mu` to dwarf the noise.
+            sampled = mu * (1.0 + torch.randn_like(std) * std)
+            mean_var = (std * std).mean(dim=1, keepdim=True)
+        else:
+            mu = x * torch.sigmoid(mu_layer(x))
+            logvar = torch.clamp(logvar_layer(x), min=-5.0, max=5.0)
+            std = torch.exp(logvar * 0.5)
+            sampled = mu
+            mean_var = (std * std).mean(dim=1, keepdim=True)
+            
+        return sampled, mu, logvar, mean_var
+
     # feature fusion and update
-    def fuse_and_update(self, common_preference, specific_preference, user_embeddings):
+    def fuse_and_update(self, common_preference, specific_preference, user_embeddings, common_var=None, specific_var=None):
         if self.fuse_mode == 'concat':
             if self.concat_mode == 'all':
                 user_all_embeddings = self.mapping(
@@ -329,7 +366,19 @@ class DGCDR(CrossDomainRecommender):
             b_2 = a_2.unsqueeze(1)
 
             scale = np.sqrt(user_embeddings.shape[-1])
-            att = torch.cat((b_1, b_2), dim=1) / scale
+            att_1 = b_1 / scale
+            att_2 = b_2 / scale
+
+            if common_var is not None and specific_var is not None:
+                uc = torch.mean(common_var, dim=1, keepdim=True)
+                us = torch.mean(specific_var, dim=1, keepdim=True)
+                # Mathematical stability fix: Use exponential decay to prevent attention 
+                # explosion or division-by-zero when variance shrinks. 
+                # High variance -> low attention, Low variance -> high attention (max 1.0)
+                att_1 = att_1 * torch.exp(-uc)
+                att_2 = att_2 * torch.exp(-us)
+
+            att = torch.cat((att_1, att_2), dim=1)
             softed_att = F.softmax(att, dim=1)
 
             c_1 = softed_att[:, 0].unsqueeze(1).repeat(1, common_preference.shape[1])
@@ -361,15 +410,15 @@ class DGCDR(CrossDomainRecommender):
 
                 if self.feature_mapping_way == 'projection':
                     # 1.1 source domain encoder
-                    source_common_preference = source_overlap_users * torch.sigmoid(
-                        self.source_en_common_layers(source_overlap_users))
-                    source_specific_preference = source_overlap_users * torch.sigmoid(
-                        self.source_en_specific_layers(source_overlap_users))
+                    source_common_preference, source_common_mu, source_common_logvar, source_common_var = self._sample_latent(
+                        self.source_en_common_layers, getattr(self, 'source_en_common_logvar_layers', None), source_overlap_users)
+                    source_specific_preference, source_specific_mu, source_specific_logvar, source_specific_var = self._sample_latent(
+                        self.source_en_specific_layers, getattr(self, 'source_en_specific_logvar_layers', None), source_overlap_users)
                     # 2.1 target domain encoder
-                    target_common_preference = target_overlap_users * torch.sigmoid(
-                        self.target_en_common_layers(target_overlap_users))
-                    target_specific_preference = target_overlap_users * torch.sigmoid(
-                        self.target_en_specific_layers(target_overlap_users))
+                    target_common_preference, target_common_mu, target_common_logvar, target_common_var = self._sample_latent(
+                        self.target_en_common_layers, getattr(self, 'target_en_common_logvar_layers', None), target_overlap_users)
+                    target_specific_preference, target_specific_mu, target_specific_logvar, target_specific_var = self._sample_latent(
+                        self.target_en_specific_layers, getattr(self, 'target_en_specific_logvar_layers', None), target_overlap_users)
                     # 1.2 source domain decoder
                     source_decode_user = source_overlap_users * torch.sigmoid(
                         self.source_de_layers(source_overlap_users))
@@ -403,18 +452,32 @@ class DGCDR(CrossDomainRecommender):
                     target_decode_specific = self.target_de_layers(target_specific_preference)
 
                 # 3. feature fusion and update
+                var_kwargs_src = {}
+                var_kwargs_tgt = {}
+                if self.feature_mapping_way == 'projection':
+                    var_kwargs_src = {'common_var': source_common_var, 'specific_var': source_specific_var}
+                    var_kwargs_tgt = {'common_var': target_common_var, 'specific_var': target_specific_var}
+                    
                 source_update_overlap_user_embeddings = self.fuse_and_update(source_common_preference,
                                                                              source_specific_preference,
-                                                                             source_overlap_users)
+                                                                             source_overlap_users, **var_kwargs_src)
                 target_update_overlap_user_embeddings = self.fuse_and_update(target_common_preference,
                                                                              target_specific_preference,
-                                                                             target_overlap_users)
+                                                                             target_overlap_users, **var_kwargs_tgt)
 
                 source_all_user_embeddings = torch.cat(
                     [source_update_overlap_user_embeddings, source_independent_user_embeddings], dim=0)
                 target_all_user_embeddings = torch.cat(
                     [target_update_overlap_user_embeddings, target_independent_user_embeddings], dim=0)
 
+                dist_dict = {}
+                if self.feature_mapping_way == 'projection':
+                    dist_dict = {
+                        'sr_c_mu': source_common_mu, 'sr_c_logvar': source_common_logvar, 'sr_c_var': source_common_var,
+                        'sr_s_mu': source_specific_mu, 'sr_s_logvar': source_specific_logvar, 'sr_s_var': source_specific_var,
+                        'tg_c_mu': target_common_mu, 'tg_c_logvar': target_common_logvar, 'tg_c_var': target_common_var,
+                        'tg_s_mu': target_specific_mu, 'tg_s_logvar': target_specific_logvar, 'tg_s_var': target_specific_var,
+                    }
                 return source_all_user_embeddings, target_all_user_embeddings, [source_common_preference,
                                                                                 target_common_preference,
                                                                                 source_specific_preference,
@@ -426,20 +489,21 @@ class DGCDR(CrossDomainRecommender):
                                                                                 source_decode_specific,
                                                                                 target_decode_user,
                                                                                 target_decode_common,
-                                                                                target_decode_specific]
+                                                                                target_decode_specific,
+                                                                                dist_dict]
         else:
             # also separate item features into domain-shared and -specific components to align with user embedding spaces.
             if self.feature_mapping_way == 'projection':
                 # 1.3 source domain item encoder
-                source_common_feature = source_embeddings * torch.sigmoid(
-                    self.source_en_item_common_layers(source_embeddings))
-                source_specific_feature = source_embeddings * torch.sigmoid(
-                    self.source_en_item_specific_layers(source_embeddings))
+                source_common_feature, source_common_mu, source_common_logvar, source_common_var = self._sample_latent(
+                    self.source_en_item_common_layers, getattr(self, 'source_en_item_common_logvar_layers', None), source_embeddings)
+                source_specific_feature, source_specific_mu, source_specific_logvar, source_specific_var = self._sample_latent(
+                    self.source_en_item_specific_layers, getattr(self, 'source_en_item_specific_logvar_layers', None), source_embeddings)
                 # 2.3 target domain item encoder
-                target_common_feature = target_embeddings * torch.sigmoid(
-                    self.target_en_item_common_layers(target_embeddings))
-                target_specific_feature = target_embeddings * torch.sigmoid(
-                    self.target_en_item_specific_layers(target_embeddings))
+                target_common_feature, target_common_mu, target_common_logvar, target_common_var = self._sample_latent(
+                    self.target_en_item_common_layers, getattr(self, 'target_en_item_common_logvar_layers', None), target_embeddings)
+                target_specific_feature, target_specific_mu, target_specific_logvar, target_specific_var = self._sample_latent(
+                    self.target_en_item_specific_layers, getattr(self, 'target_en_item_specific_logvar_layers', None), target_embeddings)
             elif self.feature_mapping_way == 'mlp':
                 # 1.3 source domain item encoder
                 source_common_feature = self.source_en_item_layers(source_embeddings)
@@ -449,13 +513,26 @@ class DGCDR(CrossDomainRecommender):
                 target_specific_feature = target_embeddings - target_common_feature
 
             # 3. item feature fusion and update
+            var_kwargs_src = {}
+            var_kwargs_tgt = {}
+            dist_dict = {}
+            if self.feature_mapping_way == 'projection':
+                var_kwargs_src = {'common_var': source_common_var, 'specific_var': source_specific_var}
+                var_kwargs_tgt = {'common_var': target_common_var, 'specific_var': target_specific_var}
+                dist_dict = {
+                    'sr_c_mu': source_common_mu, 'sr_c_logvar': source_common_logvar, 'sr_c_var': source_common_var,
+                    'sr_s_mu': source_specific_mu, 'sr_s_logvar': source_specific_logvar, 'sr_s_var': source_specific_var,
+                    'tg_c_mu': target_common_mu, 'tg_c_logvar': target_common_logvar, 'tg_c_var': target_common_var,
+                    'tg_s_mu': target_specific_mu, 'tg_s_logvar': target_specific_logvar, 'tg_s_var': target_specific_var,
+                }
+            
             source_update_item_embeddings = self.fuse_and_update(source_common_feature,
                                                                  source_specific_feature,
-                                                                 source_embeddings)
+                                                                 source_embeddings, **var_kwargs_src)
             target_update_item_embeddings = self.fuse_and_update(target_common_feature,
                                                                  target_specific_feature,
-                                                                 target_embeddings)
-            return source_update_item_embeddings, target_update_item_embeddings, [source_common_feature, target_common_feature, source_specific_feature, target_specific_feature]
+                                                                 target_embeddings, **var_kwargs_tgt)
+            return source_update_item_embeddings, target_update_item_embeddings, [source_common_feature, target_common_feature, source_specific_feature, target_specific_feature, dist_dict]
 
     def forward(self):
         source_all_embeddings, source_norm_adj_matrix = self.get_ego_embeddings(domain='source')
@@ -505,7 +582,7 @@ class DGCDR(CrossDomainRecommender):
         return user_disentangled_list, item_disentangled_list, source_user_embeddings, source_item_embeddings, target_user_embeddings, target_item_embeddings
 
     # decoder loss in Eq.(11)
-    def decoder_loss_function(self, sr_user, tg_de_user, tg_de_c, tg_de_s, t):
+    def decoder_loss_function(self, sr_user, tg_de_user, tg_de_c, tg_de_s, t, weights=None):
         sr = F.normalize(sr_user, dim=1)
         tg = F.normalize(tg_de_user, dim=1)
         tg_c = F.normalize(tg_de_c, dim=1)
@@ -516,9 +593,15 @@ class DGCDR(CrossDomainRecommender):
         pos_1_h = torch.exp(pos_1 / t)
         pos_2_h = torch.exp(pos_2 / t)
         neg_1_h = torch.exp(neg_1 / t)
-        loss_1 = -torch.mean(torch.log(pos_1_h / (pos_1_h + pos_2_h) + 1e-24))
-        loss_2 = -torch.mean(torch.log(pos_2_h / (pos_2_h + neg_1_h) + 1e-24))
-        return loss_1 + loss_2
+        
+        loss_1_unreduced = -torch.log(pos_1_h / (pos_1_h + pos_2_h) + 1e-24)
+        loss_2_unreduced = -torch.log(pos_2_h / (pos_2_h + neg_1_h) + 1e-24)
+        
+        loss = loss_1_unreduced + loss_2_unreduced
+        if weights is not None:
+            loss = loss * weights
+            
+        return torch.mean(loss)
 
     # item contrastive disentanglement (for item and user domain-specific feature)
     def item_disentangle_loss(self, sr_dis_s, tg_dis_s, sr_positive_item, t):
@@ -608,23 +691,66 @@ class DGCDR(CrossDomainRecommender):
 
         # for overlapping users
         if self.preference_disentangle:
-            sr_c, tg_c, sr_s, tg_s, sr_user, tg_user, sr_de_user, sr_de_c, sr_de_s, tg_de_user, tg_de_c, tg_de_s = user_disentangled_list
+            sr_c, tg_c, sr_s, tg_s, sr_user, tg_user, sr_de_user, sr_de_c, sr_de_s, tg_de_user, tg_de_c, tg_de_s, dist_dict = user_disentangled_list
+            
+            # KL Divergence Loss
+            if dist_dict:
+                def kl_div(logvar):
+                    if len(logvar) == 0: return torch.tensor(0.0).to(logvar.device)
+                    # Removed mu.pow(2) so we don't penalize the magnitude of the CF embeddings
+                    return -0.5 * torch.mean(torch.sum(1 + logvar - logvar.exp(), dim=1))
+                
+                is_sr_common_user = (source_user >= 0) & (source_user < self.overlapped_num_users)
+                is_tg_common_user = (target_user >= 0) & (target_user < self.overlapped_num_users)
+                
+                sr_common_user_kl = source_user[is_sr_common_user]
+                tg_common_user_kl = target_user[is_tg_common_user]
+                
+                kl_loss = kl_div(dist_dict['sr_c_logvar'][sr_common_user_kl]) + \
+                          kl_div(dist_dict['sr_s_logvar'][sr_common_user_kl]) + \
+                          kl_div(dist_dict['tg_c_logvar'][tg_common_user_kl]) + \
+                          kl_div(dist_dict['tg_s_logvar'][tg_common_user_kl])
+                
+                if len(item_disentangled_list) > 4:
+                    item_dist_dict = item_disentangled_list[4]
+                    if item_dist_dict:
+                        kl_loss += kl_div(item_dist_dict['sr_c_logvar'][source_item]) + \
+                                   kl_div(item_dist_dict['sr_s_logvar'][source_item]) + \
+                                   kl_div(item_dist_dict['tg_c_logvar'][target_item]) + \
+                                   kl_div(item_dist_dict['tg_s_logvar'][target_item])
+                
+                losses.append(self.beta_kl * kl_loss)
 
             is_sr_common_user = (source_user >= 0) & (source_user < self.overlapped_num_users)
             sr_common_user = source_user[is_sr_common_user]
-            sr_common_s = sr_s[sr_common_user]
-            sr_tg_common_s = tg_s[sr_common_user]
-            sr_common_c = sr_c[sr_common_user]
-            sr_tg_common_c = tg_c[sr_common_user]
             sr_common_user_e = sr_user[sr_common_user]
 
             is_tg_common_user = (target_user >= 0) & (target_user < self.overlapped_num_users)
             tg_common_user = target_user[is_tg_common_user]
-            tg_common_s = tg_s[tg_common_user]
-            tg_sr_common_s = sr_s[tg_common_user]
-            tg_common_c = tg_c[tg_common_user]
-            tg_sr_common_c = sr_c[tg_common_user]
             tg_common_user_e = tg_user[tg_common_user]
+
+            # Mathematical Fix: Use `mu` (the deterministic expectation) for the contrastive and orthogonality 
+            # penalties so we don't accidentally penalize the generative variance which causes logvar to plunge to -infinity.
+            if dist_dict:
+                sr_common_s = dist_dict['sr_s_mu'][sr_common_user]
+                sr_tg_common_s = dist_dict['tg_s_mu'][sr_common_user]
+                sr_common_c = dist_dict['sr_c_mu'][sr_common_user]
+                sr_tg_common_c = dist_dict['tg_c_mu'][sr_common_user]
+                
+                tg_common_s = dist_dict['tg_s_mu'][tg_common_user]
+                tg_sr_common_s = dist_dict['sr_s_mu'][tg_common_user]
+                tg_common_c = dist_dict['tg_c_mu'][tg_common_user]
+                tg_sr_common_c = dist_dict['sr_c_mu'][tg_common_user]
+            else:
+                sr_common_s = sr_s[sr_common_user]
+                sr_tg_common_s = tg_s[sr_common_user]
+                sr_common_c = sr_c[sr_common_user]
+                sr_tg_common_c = tg_c[sr_common_user]
+                
+                tg_common_s = tg_s[tg_common_user]
+                tg_sr_common_s = sr_s[tg_common_user]
+                tg_common_c = tg_c[tg_common_user]
+                tg_sr_common_c = sr_c[tg_common_user]
 
             sr_L_sim = self.sim_loss(sr_common_c, sr_tg_common_c, torch.ones(sr_common_c.size(0)).to(self.device))
             tg_L_sim = self.sim_loss(tg_common_c, tg_sr_common_c, torch.ones(tg_common_c.size(0)).to(self.device))
@@ -649,23 +775,45 @@ class DGCDR(CrossDomainRecommender):
                 tg_common_de_c = tg_de_c[sr_common_user]
                 tg_common_de_s = tg_de_s[sr_common_user]
 
+                weight_T2S, weight_S2T = None, None
+                if dist_dict:
+                    # Transfer B -> A (T2S) confidence depends on tg_c_var for the sr_common_user batch
+                    # Use exponential decay: high variance -> near zero confidence, low variance -> near 1 confidence
+                    tg_c_var = dist_dict['tg_c_var'][sr_common_user]
+                    conf_B2A = torch.exp(-torch.mean(tg_c_var, dim=1))
+                    weight_T2S = conf_B2A / (torch.mean(conf_B2A) + 1e-8)
+                    
+                    # Transfer A -> B (S2T) confidence depends on sr_c_var for the tg_common_user batch
+                    sr_c_var = dist_dict['sr_c_var'][tg_common_user]
+                    conf_A2B = torch.exp(-torch.mean(sr_c_var, dim=1))
+                    weight_S2T = conf_A2B / (torch.mean(conf_A2B) + 1e-8)
+
                 decoder_loss_T2S = self.decoder_loss_function(sr_common_user_e, tg_common_de_user, tg_common_de_c,
-                                                              tg_common_de_s, self.tem)
+                                                              tg_common_de_s, self.tem, weights=weight_T2S)
                 decoder_loss_S2T = self.decoder_loss_function(tg_common_user_e, sr_common_de_user, sr_common_de_c,
-                                                              sr_common_de_s, self.tem)
+                                                              sr_common_de_s, self.tem, weights=weight_S2T)
                 losses.extend(self.cl_decoder_weight * loss for loss in [decoder_loss_T2S, decoder_loss_S2T])
 
             # item contrastive disentanglement loss
             if self.item_negative:
-                sr_tg_user_specific_e = tg_s[sr_common_user]
+                if dist_dict:
+                    sr_tg_user_specific_e = dist_dict['tg_s_mu'][sr_common_user]
+                    tg_sr_user_specific_e = dist_dict['sr_s_mu'][tg_common_user]
+                    sr_common_s_e = dist_dict['sr_s_mu'][sr_common_user]
+                    tg_common_s_e = dist_dict['tg_s_mu'][tg_common_user]
+                else:
+                    sr_tg_user_specific_e = tg_s[sr_common_user]
+                    tg_sr_user_specific_e = sr_s[tg_common_user]
+                    sr_common_s_e = sr_s[sr_common_user]
+                    tg_common_s_e = tg_s[tg_common_user]
+
                 sr_common_user_items = source_item[is_sr_common_user]
                 sr_item_e = source_item_all_embeddings[sr_common_user_items]
-                sr_item_loss = self.item_disentangle_loss(sr_common_s, sr_tg_user_specific_e, sr_item_e, self.tem)
+                sr_item_loss = self.item_disentangle_loss(sr_common_s_e, sr_tg_user_specific_e, sr_item_e, self.tem)
 
-                tg_sr_user_specific_e = sr_s[tg_common_user]
                 tg_common_user_items = target_item[is_tg_common_user]
                 tg_item_e = target_item_all_embeddings[tg_common_user_items]
-                tg_item_loss = self.item_disentangle_loss(tg_common_s, tg_sr_user_specific_e, tg_item_e, self.tem)
+                tg_item_loss = self.item_disentangle_loss(tg_common_s_e, tg_sr_user_specific_e, tg_item_e, self.tem)
                 losses.extend(self.item_cl_weight * loss for loss in [sr_item_loss, tg_item_loss])
 
         # --- SEMANTIC ALIGNMENT LOSS ---
