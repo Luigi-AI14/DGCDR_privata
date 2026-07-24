@@ -1,6 +1,6 @@
+import os
 import numpy as np
 import scipy.sparse as sp
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -63,6 +63,64 @@ class DGCDR(CrossDomainRecommender):
         self.item_cl_weight = config['item_cl_weight']  # (float) weights of item disentanglement loss
         self.item_mapping = config['item_mapping']  # (bool) whether to use a non-linear mapping for item
         self.item_disentangle = config['item_disentangle']  # (bool) whether to apply disentanglement and fusion to item
+        
+        # --- DUAL SEMANTIC DISENTANGLEMENT CONFIG (LLM-SemDGCDR) ---
+        self.use_semantic_disentanglement = config['use_semantic_disentanglement'] if 'use_semantic_disentanglement' in config else False
+        self.semantic_loss_weight = config['semantic_loss_weight'] if 'semantic_loss_weight' in config else 0.1
+        
+        if self.use_semantic_disentanglement:
+            # Paths to shared and specific embeddings
+            src_shared_path = config['source_shared_text_path'] if 'source_shared_text_path' in config else ''
+            src_spec_path = config['source_specific_text_path'] if 'source_specific_text_path' in config else ''
+            tgt_shared_path = config['target_shared_text_path'] if 'target_shared_text_path' in config else ''
+            tgt_spec_path = config['target_specific_text_path'] if 'target_specific_text_path' in config else ''
+            
+            src_shared_dict = torch.load(src_shared_path, map_location='cpu') if src_shared_path and os.path.exists(src_shared_path) else {}
+            src_spec_dict = torch.load(src_spec_path, map_location='cpu') if src_spec_path and os.path.exists(src_spec_path) else {}
+            tgt_shared_dict = torch.load(tgt_shared_path, map_location='cpu') if tgt_shared_path and os.path.exists(tgt_shared_path) else {}
+            tgt_spec_dict = torch.load(tgt_spec_path, map_location='cpu') if tgt_spec_path and os.path.exists(tgt_spec_path) else {}
+            
+            # Infer text dimension dynamically
+            self.semantic_text_dim = 768
+            for d in [src_shared_dict, src_spec_dict, tgt_shared_dict, tgt_spec_dict]:
+                if d and len(d) > 0:
+                    self.semantic_text_dim = next(iter(d.values())).shape[-1]
+                    break
+            
+            self.shared_text_matrix = torch.zeros((self.total_num_items, self.semantic_text_dim), device=self.device)
+            self.specific_text_matrix = torch.zeros((self.total_num_items, self.semantic_text_dim), device=self.device)
+            
+            mapped_shared, mapped_spec = 0, 0
+            for i in range(1, self.total_num_items):
+                token = None
+                if i < self.target_num_items:
+                    try:
+                        token = dataset.target_domain_dataset.id2token(dataset.target_domain_dataset.iid_field, i)
+                    except: pass
+                else:
+                    try:
+                        token = dataset.source_domain_dataset.id2token(dataset.source_domain_dataset.iid_field, i - self.target_num_items + 1)
+                    except: pass
+                    
+                if token is not None:
+                    if token in src_shared_dict:
+                        self.shared_text_matrix[i] = src_shared_dict[token].to(self.device)
+                        mapped_shared += 1
+                    elif token in tgt_shared_dict:
+                        self.shared_text_matrix[i] = tgt_shared_dict[token].to(self.device)
+                        mapped_shared += 1
+                        
+                    if token in src_spec_dict:
+                        self.specific_text_matrix[i] = src_spec_dict[token].to(self.device)
+                        mapped_spec += 1
+                    elif token in tgt_spec_dict:
+                        self.specific_text_matrix[i] = tgt_spec_dict[token].to(self.device)
+                        mapped_spec += 1
+            
+            print(f"[LLM-SemDGCDR] Shared text embeddings mapped: {mapped_shared} / {self.total_num_items}")
+            print(f"[LLM-SemDGCDR] Specific text embeddings mapped: {mapped_spec} / {self.total_num_items}")
+            self.shared_text_matrix.requires_grad = False
+            self.specific_text_matrix.requires_grad = False
         
         # --- TEXT EMBEDDING CONFIG ---
         self.use_text_embeddings = config['use_text_embeddings'] if 'use_text_embeddings' in config else False
@@ -192,6 +250,19 @@ class DGCDR(CrossDomainRecommender):
 
             self.sim_loss = torch.nn.CosineEmbeddingLoss(margin=0.5)
             
+        if hasattr(self, 'use_semantic_disentanglement') and self.use_semantic_disentanglement:
+            target_dim = mlp_hidden_size[-1] if type(mlp_hidden_size) is list else mlp_hidden_size
+            self.shared_text_projector = nn.Sequential(
+                nn.Linear(self.semantic_text_dim, target_dim),
+                nn.ReLU(),
+                nn.Linear(target_dim, target_dim)
+            ).to(self.device)
+            self.specific_text_projector = nn.Sequential(
+                nn.Linear(self.semantic_text_dim, target_dim),
+                nn.ReLU(),
+                nn.Linear(target_dim, target_dim)
+            ).to(self.device)
+
         if hasattr(self, 'use_text_embeddings') and self.use_text_embeddings:
             target_dim = mlp_hidden_size[-1] if type(mlp_hidden_size) is list else mlp_hidden_size
             self.text_projector = nn.Sequential(
@@ -668,8 +739,39 @@ class DGCDR(CrossDomainRecommender):
                 tg_item_loss = self.item_disentangle_loss(tg_common_s, tg_sr_user_specific_e, tg_item_e, self.tem)
                 losses.extend(self.item_cl_weight * loss for loss in [sr_item_loss, tg_item_loss])
 
-        # --- SEMANTIC ALIGNMENT LOSS ---
-        if hasattr(self, 'use_text_embeddings') and self.use_text_embeddings and len(item_disentangled_list) > 0:
+        # --- DUAL SEMANTIC ALIGNMENT LOSS (LLM-SemDGCDR) ---
+        if hasattr(self, 'use_semantic_disentanglement') and self.use_semantic_disentanglement and len(item_disentangled_list) >= 4:
+            source_item = interaction[self.SOURCE_ITEM_ID]
+            target_item = interaction[self.TARGET_ITEM_ID]
+            
+            sr_common_feat = item_disentangled_list[0]
+            tg_common_feat = item_disentangled_list[1]
+            sr_spec_feat = item_disentangled_list[2]
+            tg_spec_feat = item_disentangled_list[3]
+            
+            # Shared text projection -> Common item feature alignment
+            sr_shared_proj = F.normalize(self.shared_text_projector(self.shared_text_matrix[source_item]), dim=-1)
+            tg_shared_proj = F.normalize(self.shared_text_projector(self.shared_text_matrix[target_item]), dim=-1)
+            
+            sr_common_norm = F.normalize(sr_common_feat[source_item], dim=-1)
+            tg_common_norm = F.normalize(tg_common_feat[target_item], dim=-1)
+            
+            loss_shared_sr = (1.0 - torch.sum(sr_shared_proj * sr_common_norm, dim=-1)).mean()
+            loss_shared_tg = (1.0 - torch.sum(tg_shared_proj * tg_common_norm, dim=-1)).mean()
+            
+            # Specific text projection -> Specific item feature alignment
+            sr_spec_proj = F.normalize(self.specific_text_projector(self.specific_text_matrix[source_item]), dim=-1)
+            tg_spec_proj = F.normalize(self.specific_text_projector(self.specific_text_matrix[target_item]), dim=-1)
+            
+            sr_spec_norm = F.normalize(sr_spec_feat[source_item], dim=-1)
+            tg_spec_norm = F.normalize(tg_spec_feat[target_item], dim=-1)
+            
+            loss_spec_sr = (1.0 - torch.sum(sr_spec_proj * sr_spec_norm, dim=-1)).mean()
+            loss_spec_tg = (1.0 - torch.sum(tg_spec_proj * tg_spec_norm, dim=-1)).mean()
+            
+            sem_loss = loss_shared_sr + loss_shared_tg + loss_spec_sr + loss_spec_tg
+            losses.append(self.semantic_loss_weight * sem_loss)
+        elif hasattr(self, 'use_text_embeddings') and self.use_text_embeddings and len(item_disentangled_list) > 0:
             source_item = interaction[self.SOURCE_ITEM_ID]
             target_item = interaction[self.TARGET_ITEM_ID]
             
