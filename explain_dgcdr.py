@@ -28,7 +28,11 @@ import torch
 
 from recbole_cdr.quick_start.quick_start import load_data_and_model
 
-from extensions.explainability.attribution import explain_user
+from extensions.explainability.attribution import (
+    explain_user,
+    pooled_transfer_ratio,
+    reliable_attributions,
+)
 from extensions.explainability.channels import (
     SHARED,
     SPECIFIC,
@@ -74,24 +78,37 @@ def select_users(model, num_users, seed=42):
     return candidates
 
 
-def summarise(explanations):
-    """Aggregate statistics over tau -- the analysis this attribution enables."""
-    taus = np.array([a.tau for e in explanations for a in e.attributions])
+def summarise(explanations, min_magnitude_ratio=0.1):
+    """Aggregate statistics over tau -- the analysis this attribution enables.
+
+    Statistics are computed over the attributions that carry real contribution
+    mass: where the two channels nearly cancel, tau is numerically meaningless
+    and would otherwise inject spurious extremes into the distribution.
+    """
+    everything = [a for e in explanations for a in e.attributions]
+    reliable, threshold = reliable_attributions(everything, min_magnitude_ratio)
+    taus = np.array([a.tau for a in reliable])
     if taus.size == 0:
         return {}
 
     by_rank = defaultdict(list)
     by_history = defaultdict(list)
+    keep = set(id(a) for a in reliable)
     for explanation in explanations:
         bucket = len(explanation.history)
         bucket = '0-4' if bucket < 5 else '5-19' if bucket < 20 else '20+'
         for attribution in explanation.attributions:
+            if id(attribution) not in keep:
+                continue
             by_rank[attribution.rank].append(attribution.tau)
             by_history[bucket].append(attribution.tau)
 
     return {
         'n_users': len(explanations),
         'n_recommendations': int(taus.size),
+        'n_discarded_low_magnitude': len(everything) - len(reliable),
+        'magnitude_threshold': threshold,
+        'tau_pooled': pooled_transfer_ratio(reliable),
         'tau_mean': float(taus.mean()),
         'tau_std': float(taus.std()),
         'tau_median': float(np.median(taus)),
@@ -128,7 +145,11 @@ def write_markdown(path, explanations, summary, verification, catalogue):
         "## Transfer ratio statistics",
         "",
         f"- recommendations analysed: {summary.get('n_recommendations', 0)} "
-        f"over {summary.get('n_users', 0)} overlapping users",
+        f"over {summary.get('n_users', 0)} overlapping users "
+        f"({summary.get('n_discarded_low_magnitude', 0)} discarded: channels "
+        f"nearly cancel, tau not meaningful)",
+        f"- **tau pooled**: {summary.get('tau_pooled', 0):.4f} "
+        f"(magnitude-weighted; the aggregate to report)",
         f"- tau mean: {summary.get('tau_mean', 0):.4f} (std {summary.get('tau_std', 0):.4f})",
         f"- tau median: {summary.get('tau_median', 0):.4f} "
         f"[p10 {summary.get('tau_p10', 0):.4f}, p90 {summary.get('tau_p90', 0):.4f}]",
@@ -187,6 +208,9 @@ def main():
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--no_mask_history', action='store_true',
                         help="Do not exclude the user's training items from the ranking")
+    parser.add_argument('--tau_min_magnitude_ratio', type=float, default=0.1,
+                        help="Discard attributions whose contribution magnitude is "
+                             "below this fraction of the median, where tau is noise")
     parser.add_argument('--metadata', nargs='*', default=None,
                         help="JSONL item metadata files (optional)")
     parser.add_argument('--metadata_id_field', default='parent_asin')
@@ -254,7 +278,7 @@ def main():
             ground_truth=ground_truth.get(user_id, []),
         ))
 
-    summary = summarise(explanations)
+    summary = summarise(explanations, args.tau_min_magnitude_ratio)
 
     if args.llm_model:
         print(f"Verbalising with {args.llm_model}...")

@@ -29,11 +29,14 @@ class ItemAttribution:
         item_channel_totals (dict): contribution aggregated per item channel.
         tau (float): transfer ratio in [0, 1] over the disentangled channels.
         tau_full (float): transfer ratio including the raw GNN channel.
+        magnitude (float): |C_shared| + |C_specific|, the denominator of tau.
+            tau is a ratio of signed sums, so it becomes numerically
+            meaningless when this is close to zero -- see :func:`is_reliable`.
         rank (int): position in the user's recommendation list (1-based).
     """
 
     def __init__(self, item_id, score, matrix, user_channel_totals,
-                 item_channel_totals, tau, tau_full, rank=None):
+                 item_channel_totals, tau, tau_full, magnitude, rank=None):
         self.item_id = item_id
         self.score = score
         self.matrix = matrix
@@ -41,6 +44,7 @@ class ItemAttribution:
         self.item_channel_totals = item_channel_totals
         self.tau = tau
         self.tau_full = tau_full
+        self.magnitude = magnitude
         self.rank = rank
 
     @property
@@ -57,6 +61,7 @@ class ItemAttribution:
             'score': self.score,
             'transfer_ratio': self.tau,
             'transfer_ratio_full': self.tau_full,
+            'magnitude': self.magnitude,
             'dominant_channel': self.dominant_channel,
             'user_channel_totals': self.user_channel_totals,
             'item_channel_totals': self.item_channel_totals,
@@ -120,7 +125,39 @@ def _transfer_ratios(user_totals):
 
     denom_full = shared + specific + base
     tau_full = shared / denom_full if denom_full > 0 else 0.0
-    return tau, tau_full
+    return tau, tau_full, denom
+
+
+def pooled_transfer_ratio(attributions):
+    """Aggregate tau over many recommendations without averaging ratios.
+
+    A mean of per-item ratios weights an item whose channels nearly cancel the
+    same as one carrying the bulk of the score.  Pooling the numerators and
+    denominators instead answers the population-level question directly -- of
+    all the disentangled contribution mass, how much is transferred -- and is
+    the aggregate that should be reported.
+    """
+    numerator = sum(abs(a.user_channel_totals.get(SHARED, 0.0)) for a in attributions)
+    denominator = sum(a.magnitude for a in attributions)
+    return numerator / denominator if denominator > 0 else 0.0
+
+
+def reliable_attributions(attributions, min_magnitude_ratio=0.1):
+    """Drop attributions whose tau is dominated by numerical noise.
+
+    tau is a ratio of signed sums: when ``magnitude`` approaches zero the two
+    channels nearly cancel and tau swings across the whole [0, 1] range without
+    meaning anything.  On a real catalogue this affects low-scoring items, so
+    tau statistics must be reported over the items that carry actual
+    contribution mass.  The threshold is relative to the median magnitude of
+    the set, so it adapts to the scale of the checkpoint.
+    """
+    if not attributions:
+        return [], 0.0
+    magnitudes = sorted(a.magnitude for a in attributions)
+    median = magnitudes[len(magnitudes) // 2]
+    threshold = median * min_magnitude_ratio
+    return [a for a in attributions if a.magnitude >= threshold], threshold
 
 
 def attribute_scores(decomposition, user_id, item_ids):
@@ -159,7 +196,7 @@ def attribute_scores(decomposition, user_id, item_ids):
         user_totals = {k: sum(matrix[k].values()) for k in user_names}
         item_totals = {l: sum(matrix[k][l] for k in user_names) for l in item_names}
         score = sum(user_totals.values())
-        tau, tau_full = _transfer_ratios(user_totals)
+        tau, tau_full, magnitude = _transfer_ratios(user_totals)
 
         results.append(ItemAttribution(
             item_id=int(item_ids[idx].item()),
@@ -169,6 +206,7 @@ def attribute_scores(decomposition, user_id, item_ids):
             item_channel_totals=item_totals,
             tau=tau,
             tau_full=tau_full,
+            magnitude=magnitude,
         ))
     return results
 
