@@ -5,34 +5,38 @@ Tre run analizzati: CDs→Instruments, Elec→Cloth, Cloth→Elec.
 
 ---
 
-## 1. Cosa fa la pipeline, in parole semplici
+## 1. Cosa fa la pipeline
 
 DGCDR divide i gusti di ogni utente in due parti:
 
-- **shared** — i gusti che l'utente porta con sé dall'altro dominio (es. dall'abbigliamento all'elettronica);
-- **specific** — i gusti che valgono solo nel dominio in cui gli stiamo raccomandando qualcosa.
+- **shared** — i gusti che l'utente porta dall'altro dominio;
+- **specific** — i gusti che valgono solo nel dominio in cui stiamo raccomandando.
 
-Poi le rimette insieme e produce un punteggio per ogni prodotto. La pipeline che ho costruito fa una cosa sola, ma la fa in modo verificabile: **prende il punteggio finale e lo riapre, dicendo quanta parte viene da ciascuna delle due parti**.
+Poi le rimette insieme e calcola un punteggio per ogni prodotto.
 
-Da questa scomposizione nasce una quantità che chiamo **τ (transfer ratio)**: un numero tra 0 e 1 che dice, per ogni singola raccomandazione, quanto quella raccomandazione dipende da conoscenza importata dall'altro dominio invece che dai gusti locali dell'utente.
+La pipeline fa una cosa sola: **riapre quel punteggio e dice quanta parte viene da ciascuna delle due**.
 
-- τ vicino a 1 → "ti consiglio questo perché ho capito i tuoi gusti guardando l'altro dominio"
-- τ vicino a 0 → "ti consiglio questo per come ti sei comportato qui"
-- τ ≈ 0.5 → le due cose pesano uguale
+Il risultato è **τ (transfer ratio)**, un numero tra 0 e 1, calcolato per ogni singola raccomandazione:
+
+- **τ ≈ 1** → "ti consiglio questo perché ho capito i tuoi gusti nell'altro dominio"
+- **τ ≈ 0** → "ti consiglio questo per come ti sei comportato qui"
+- **τ ≈ 0.5** → le due cose pesano uguale
 
 ### Perché non è il solito explainer
 
-Quasi tutti i sistemi che "spiegano" una raccomandazione con un LLM funzionano così: danno all'LLM la cronologia dell'utente e gli chiedono di inventare una motivazione plausibile. Il testo che esce suona bene, ma **nessuno garantisce che abbia a che fare con quello che il modello ha realmente calcolato**. È una ricostruzione a posteriori.
+Gli explainer basati su LLM funzionano così: passano all'LLM la cronologia dell'utente e gli chiedono una motivazione plausibile. Il testo suona bene. Ma **niente garantisce che c'entri con quello che il modello ha calcolato**: è una giustificazione costruita a posteriori.
 
-Qui è diverso, e il motivo è aritmetico. DGCDR combina le sue componenti con una somma, e il punteggio è un prodotto scalare. Quindi il punteggio **si spacca esattamente**, senza approssimazioni:
+Qui il meccanismo è aritmetico. DGCDR somma le sue componenti, e il punteggio è un prodotto scalare. Quindi il punteggio si spacca in modo esatto:
 
 ```
 punteggio = (contributo shared) + (contributo specific) + (contributo collaborativo grezzo)
 ```
 
-Non è una stima, non è un modello surrogato come LIME o SHAP: è la stessa aritmetica che il modello ha eseguito, riscritta. Per essere sicuri che non ci siano errori, ogni esecuzione **ricompone i pezzi e li confronta con l'output vero del modello**, e si rifiuta di produrre spiegazioni se non tornano. Sui tre run l'errore relativo è stato tra 1e-07 e 3e-07, cioè puro arrotondamento in virgola mobile.
+Non è una stima e non è un surrogato come LIME o SHAP. È la stessa aritmetica del modello, riscritta.
 
-L'LLM, quando lo si usa, arriva **dopo** e ha un ruolo molto più modesto: riceve i numeri già calcolati e li mette in italiano corrente, con il vincolo esplicito di non contraddirli. Non decide lui il perché.
+Ogni esecuzione ricompone i pezzi e li confronta con l'output vero del modello. Se non tornano, si ferma. Sui tre run l'errore relativo sta tra 1e-07 e 3e-07: solo arrotondamento in virgola mobile.
+
+L'LLM arriva **dopo**, e fa molto meno di quanto si creda: riceve i numeri e li traduce in linguaggio naturale, con il divieto esplicito di contraddirli. Non decide lui il perché.
 
 ### I pezzi
 
@@ -41,15 +45,15 @@ L'LLM, quando lo si usa, arriva **dopo** e ha un ruolo molto più modesto: ricev
 | `channels.py` | riapre gli embedding nelle componenti e verifica che tornino |
 | `attribution.py` | calcola la matrice dei contributi e τ |
 | `metadata.py` | traduce gli ID dei prodotti in titoli leggibili (opzionale) |
-| `verbalize.py` | costruisce il prompt vincolato e parla con l'LLM (opzionale) |
+| `verbalize.py` | costruisce il prompt vincolato e interroga l'LLM (opzionale) |
 | `explain_dgcdr.py` | lo script da lanciare |
 | `test_decomposition.py` | autotest: 8 controlli, da rilanciare su ogni nuovo modello |
 
-La pipeline **non tocca il codice del modello**: ricostruisce tutto usando le funzioni pubbliche di DGCDR. Il training resta esattamente com'era.
+La pipeline **non tocca il codice del modello**: usa solo le funzioni pubbliche di DGCDR. Il training resta identico.
 
 ### Quando si rifiuta di funzionare
 
-Meglio un errore che una spiegazione falsa. Lo script si blocca se il modello usa una fusione non additiva (`fuse_mode='concat'`), se il disentanglement è disattivato, o se il modello non è in modalità valutazione. In tutti questi casi la scomposizione non sarebbe esatta, e una spiegazione "quasi giusta" è peggio di nessuna spiegazione.
+Meglio un errore che una spiegazione falsa. Lo script si blocca in tre casi: fusione non additiva (`fuse_mode='concat'`), disentanglement disattivato, modello non in modalità valutazione. In tutti e tre la scomposizione non sarebbe esatta.
 
 ---
 
@@ -66,29 +70,29 @@ Meglio un errore che una spiegazione falsa. Lo script si blocca se il modello us
 | `item_cl_weight` | 0.01 | 0.1 | 0.01 |
 | Recall@20 (test) | 0.0648 | 0.0253 | 0.0397 |
 
-Il primo era nato come prova tecnica per validare il codice; gli altri due sono gli esperimenti veri, sulle due direzioni della stessa coppia di domini.
+Il primo serviva a validare il codice. Gli altri due sono gli esperimenti veri, sulle due direzioni della stessa coppia di domini.
 
 ---
 
-## 3. I tre risultati
+## 3. I risultati
 
-### 3.0 — Premessa: lo strumento di misura era difettoso
+### 3.0 Lo strumento di misura era difettoso
 
-Prima dei risultati va detto che `evaluate_disentanglement.py`, con cui misuriamo tutto quanto segue, aveva tre difetti. La matematica di dCor era corretta (verificata su casi noti: restituisce esattamente 1 per input identici, riscalati e ruotati), ma la misurazione attorno no — e **tutti e tre i difetti facevano sembrare il modello più disentangled di quanto sia**.
+`evaluate_disentanglement.py` misura tutto quello che segue, e aveva tre difetti. La matematica di dCor era corretta — verificata su casi noti, restituisce esattamente 1 per input identici, riscalati e ruotati. Il problema stava attorno. **Tutti e tre i difetti gonfiavano il disentanglement apparente.**
 
-1. **I probe giravano su feature non standardizzate.** Con valori intorno a 0.02, la penalità L2 di default dominava e i classificatori andavano in underfitting. Non davano warning: semplicemente non usavano il segnale disponibile. Su Elec→Cloth il probe lineare legge 98.82% con lo scaler contro 81.79% senza: **diciassette punti di sottostima**.
-2. **dCor era confrontato con uno zero irraggiungibile.** È la forma V-statistic, positivamente distorta a N finito e alta dimensione: due gaussiane *indipendenti* con N=5000 e D=256 danno dCor = 0.41. Un valore grezzo non è quindi interpretabile. Ora lo script permuta le righe di uno dei due spazi per ottenere il null empirico e riporta lo scarto.
-3. **La matrice delle distanze occupava ~19 GB** a 35k utenti. Ora campiona (il sotto-campione a 5.000 sposta la stima di un centesimo).
+1. **Probe su feature non standardizzate.** I valori stanno intorno a 0.02, quindi la penalità L2 di default dominava e i classificatori andavano in underfitting. Nessun warning: semplicemente non usavano il segnale disponibile. Su Elec→Cloth il probe lineare legge 98.82% con lo scaler e 81.79% senza. **Diciassette punti di sottostima.**
+2. **dCor confrontato con uno zero irraggiungibile.** È la forma V-statistic, distorta verso l'alto a N finito e alta dimensione: due gaussiane *indipendenti* con N=5000 e D=256 danno 0.41. Il valore grezzo non significa nulla da solo. Ora lo script permuta le righe di uno dei due spazi, ottiene il null empirico e riporta lo scarto.
+3. **19 GB di memoria** per la matrice delle distanze a 35k utenti. Ora campiona: a 5.000 utenti la stima cambia di un centesimo.
 
-**Perché questo è esso stesso un risultato.** Il difetto numero 1 avrebbe portato a concludere che Elec→Cloth aveva un "disentanglement score" del 18%, cioè mediocre ma non nullo. Il valore vero è 1.18%. Un probe sotto-specificato è un modo silenzioso e facilissimo di sovrastimare il disentanglement, e va tenuto presente leggendo la letteratura che riporta questo tipo di metriche.
+**Questo è già un risultato.** Con il difetto 1, Elec→Cloth sembrava avere un disentanglement score del 18%: mediocre ma non nullo. Il valore vero è 1.18%. Un probe sotto-specificato sovrastima il disentanglement in modo silenzioso, e la stessa trappola vale per chiunque riporti queste metriche.
 
 ### Risultato 1 — L'ortogonalità non compra indipendenza
 
 È il risultato principale.
 
-Il modello viene addestrato a rendere i due canali **perpendicolari**, cosa che misuriamo con il coseno. Ma l'obiettivo scientifico non è la perpendicolarità: è che il canale *shared* abbia davvero dimenticato da quale dominio viene. Questo si misura in altro modo — con la distance correlation e chiedendo a un classificatore di indovinare il dominio guardando solo quel canale.
+Il modello è addestrato a rendere i due canali **perpendicolari**, e il coseno misura proprio quello. Ma l'obiettivo non è la perpendicolarità: è che il canale *shared* abbia dimenticato da quale dominio viene. Quello si misura in altro modo — con la distance correlation, e chiedendo a un classificatore di indovinare il dominio guardando solo quel canale.
 
-I numeri qui sotto sono quelli **ricalcolati** dopo la correzione dello strumento di misura descritta in §3.0; le versioni precedenti di questo documento riportavano valori che sottostimavano la fuga di informazione.
+I numeri sono quelli **ricalcolati** dopo la correzione descritta in §3.0.
 
 | | CDs→Instruments | Elec→Cloth | **Cloth→Elec** |
 |---|---|---|---|
@@ -101,31 +105,33 @@ I numeri qui sotto sono quelli **ricalcolati** dopo la correzione dello strument
 | Disent. score lineare — *ideale >35%* | 0.99% | 1.18% | **1.24%** |
 | Disent. score MLP — *ideale >35%* | −0.72% | 0.87% | **0.23%** |
 
-⚠️ CDs→Instruments ha solo 1.842 utenti sovrapposti contro i 5.000 campionati negli altri due, e la baseline del null dipende da quel numero: la sua colonna **non è confrontabile** con le altre due. Le due direzioni Elec/Cloth invece sì.
+⚠️ CDs→Instruments ha 1.842 utenti sovrapposti contro i 5.000 campionati altrove. Il null dipende da quel numero, quindi quella colonna **non è confrontabile** con le altre due. Le due direzioni Elec/Cloth sì.
 
-Confrontando le due direzioni comparabili: decuplicando il peso della regolarizzazione, l'ortogonalità **migliora di tre volte** (coseno da 0.036 a 0.012) — la loss fa esattamente il mestiere per cui è scritta. E l'indipendenza reale **non migliora di nulla**:
+Confrontiamo le due direzioni confrontabili. Decuplicando il peso della regolarizzazione, l'ortogonalità **migliora di tre volte**: coseno da 0.036 a 0.012. La loss fa esattamente il mestiere per cui è scritta.
 
-- il probe lineare resta inchiodato (98.82% → 98.76%, differenza nel rumore);
-- il probe non lineare peggiora leggermente (99.13% → 99.77%);
-- il gap di dCor peggiora, in modo più marcato sul lato source (+0.647 → +0.763).
+L'indipendenza reale **non migliora affatto**:
 
-I probe sono ormai a soffitto — con il canale specific al 100% e quello shared sopra il 98%, non c'è quasi spazio per peggiorare, quindi la misura più informativa qui è il gap di dCor, che è l'unica a muoversi in modo apprezzabile. E si muove nella direzione sbagliata.
+- probe lineare fermo: 98.82% → 98.76%, differenza nel rumore;
+- probe MLP leggermente peggio: 99.13% → 99.77%;
+- gap di dCor peggio, soprattutto sul lato source: +0.647 → +0.763.
 
-La lettura onesta è quindi: **la manopola dell'ortogonalità non compra indipendenza a nessun prezzo.** Decuplicandola si ottiene esattamente ciò che penalizza — vettori più perpendicolari — e zero progresso su ciò che serviva. Nel run con la regolarizzazione più forte il canale che dovrebbe aver dimenticato il dominio è identificabile al **99,77%**.
+I probe sono a soffitto: canale specific al 100%, shared sopra il 98%. Lì non c'è più spazio per muoversi, quindi la misura informativa è il gap di dCor — l'unica che cambia in modo apprezzabile. E cambia nella direzione sbagliata.
 
-**L'analogia.** Prendi dei punti disposti su una circonferenza. La coordinata x e la y hanno correlazione zero, sono "perpendicolari" in senso statistico. Eppure conoscendo la x sai esattamente quanto vale la y a meno del segno. Sono **scorrelate ma tutt'altro che indipendenti**. Il modello ottimizza una funzione che azzera il prodotto scalare, e ottiene precisamente quello: prodotto scalare zero. Non l'indipendenza, che era ciò che serviva.
+**Conclusione: la manopola dell'ortogonalità non compra indipendenza a nessun prezzo.** Decuplicarla dà esattamente ciò che la loss penalizza, vettori più perpendicolari, e zero progresso su ciò che serviva. Nel run con la regolarizzazione più forte, il canale che dovrebbe aver dimenticato il dominio è identificabile al **99,77%**.
 
-**Cosa significa.** Le metriche con cui la comunità valuta il disentanglement possono dare risultati ottimi mentre l'obiettivo resta mancato — e peggiorare proprio mentre migliorano. È un problema metodologico che riguarda l'area, non un difetto di questa implementazione.
+**L'analogia.** Prendi dei punti su una circonferenza. Le coordinate x e y hanno correlazione zero: sono "perpendicolari" in senso statistico. Eppure conoscendo x sai quanto vale y, a meno del segno. Sono **scorrelate ma dipendenti**. Il modello azzera il prodotto scalare e ottiene precisamente quello. Non l'indipendenza, che era l'obiettivo.
 
-> **Il confondente da dichiarare.** Tra i due run grandi non è cambiato solo `cl_org_weight` (0.1 → 1). Anche `cl_sim_weight` e `item_cl_weight` sono scesi da 0.1 a 0.01. `cl_sim_weight` è la loss che **allinea** le common features tra i domini: indebolendola di dieci volte, è del tutto plausibile che il canale shared trattenga più informazione di dominio. Questa spiegazione alternativa è, con i dati attuali, altrettanto valida della mia. E due run sono due punti: non stabiliscono un andamento. Vedi la sezione 6, esperimento 1.
+**Cosa significa.** Le metriche con cui l'area valuta il disentanglement possono dare ottimi risultati mentre l'obiettivo resta mancato. È un problema di metodo, non di questa implementazione.
+
+> **Confondente da dichiarare.** Tra i due run grandi non è cambiato solo `cl_org_weight` (0.1 → 1). Anche `cl_sim_weight` e `item_cl_weight` sono scesi da 0.1 a 0.01. `cl_sim_weight` è la loss che **allinea** le common features tra domini: indebolita di dieci volte, può benissimo lasciare più informazione di dominio nel canale shared. Con i dati attuali questa spiegazione vale quanto la mia. E due run sono due punti: non fanno un andamento.
 >
-> **Un effetto soffitto.** Con i probe sopra il 98% in entrambe le direzioni, gran parte del confronto avviene in una zona dove lo strumento non ha più risoluzione. Lo sweep controllato andrebbe quindi valutato guardando il gap di dCor, non i probe, oppure introducendo un probe più debole (meno capacità, meno dati) che non saturi.
+> **Effetto soffitto.** Con i probe sopra il 98% in entrambe le direzioni, il confronto avviene dove lo strumento non ha più risoluzione. Lo sweep va quindi valutato sul gap di dCor, o con un probe deliberatamente più debole che non saturi.
 
-### Risultato 2 — Lo strumento misura qualcosa di reale, e distingue il collasso
+### Risultato 2 — τ misura qualcosa di reale, e riconosce il collasso
 
-Sul dataset piccolo τ era una costante: 0.4974 con deviazione standard **0.006**, identica per ogni utente e ogni prodotto. Sembrava un bug. Non lo era: lì i due canali erano letteralmente **lo stesso vettore** (coseno 0.997), quindi contribuivano per forza in parti uguali. τ stava dicendo la verità.
+Sul dataset piccolo τ era una costante: 0.4974, deviazione standard **0.006**, uguale per ogni utente e ogni prodotto. Sembrava un bug del mio codice. Non lo era: lì i due canali erano **lo stesso vettore** (coseno 0.997), quindi contribuivano per forza allo stesso modo. τ diceva la verità.
 
-Ho ricostruito il meccanismo del collasso: entrambi i canali si ottengono filtrando lo stesso vettore di partenza con due "rubinetti" appresi, e i due rubinetti avevano imparato valori quasi identici (0.408 contro 0.409). Da lì degenera tutto a catena, anche i pesi dell'attenzione, che finiscono a 0.4999 contro 0.5001.
+Il meccanismo del collasso: entrambi i canali si ottengono filtrando lo stesso vettore con due "rubinetti" appresi, e i rubinetti avevano imparato valori quasi identici, 0.408 contro 0.409. Da lì degenera tutto, compresi i pesi dell'attenzione, che finiscono a 0.4999 contro 0.5001.
 
 | | CDs→Instruments | Elec→Cloth | Cloth→Elec |
 |---|---|---|---|
@@ -135,15 +141,15 @@ Ho ricostruito il meccanismo del collasso: entrambi i canali si ottengono filtra
 | transfer-driven (τ≥0.6) | 0% | 3.0% | 11.2% |
 | native-driven (τ≤0.4) | 0% | 39.0% | 7.8% |
 
-**Attenzione a non confondere due cose diverse.** Su CDs→Instruments τ vale ~0.50; su Cloth→Elec vale ~0.50. Ma nel primo caso è un collasso (deviazione 0.006: *tutti* uguali), nel secondo è una distribuzione vera centrata sulla metà (deviazione 0.080, utenti da 0.31 a 0.73). Il valore medio da solo non dice nulla: **è la dispersione a distinguere un modello che bilancia i canali da un modello che non li ha separati affatto.**
+**Due situazioni opposte dietro lo stesso numero.** τ vale ~0.50 sia su CDs→Instruments sia su Cloth→Elec. Ma nel primo caso è un collasso — deviazione 0.006, tutti identici. Nel secondo è una distribuzione vera centrata a metà — deviazione 0.080, utenti da 0.31 a 0.73. **Chi guarda solo la media conclude il contrario del vero: il segnale è la dispersione.**
 
-**Cosa significa.** Due cose. L'attribuzione distingue davvero raccomandazioni di natura diversa. E τ funziona come **spia diagnostica**: se è piatta, il disentanglement è collassato. È un test leggibile a colpo d'occhio e, a differenza delle metriche esistenti, è definito sulla singola raccomandazione invece che sull'intero spazio latente.
+**Cosa significa.** L'attribuzione distingue raccomandazioni di natura diversa. E τ funziona come **spia diagnostica**: se è piatta, il disentanglement è collassato. È leggibile a colpo d'occhio e, a differenza delle metriche esistenti, è definita sulla singola raccomandazione invece che sull'intero spazio latente.
 
 ### Risultato 3 — Il transfer va ai clienti abituali, non ai nuovi (replica debole)
 
-Ci si aspetta che il cross-domain serva soprattutto a chi ha poca storia nel dominio target: non sapendo cosa consigliargli, il sistema attinge dall'altro dominio. È la motivazione con cui questi modelli vengono normalmente giustificati.
+L'assunzione comune è che il cross-domain serva a chi ha poca storia nel dominio target: non sapendo cosa consigliargli, il sistema attinge dall'altro dominio. È la motivazione con cui questi modelli vengono giustificati.
 
-In entrambi i run grandi succede il contrario: **più un utente ha storia nel dominio target, più la sua raccomandazione dipende dal transfer.**
+In entrambi i run grandi succede il contrario: **più storia ha l'utente nel dominio target, più la raccomandazione dipende dal transfer.**
 
 | | Elec→Cloth | Cloth→Elec |
 |---|---|---|
@@ -152,53 +158,53 @@ In entrambi i run grandi succede il contrario: **più un utente ha storia nel do
 | τ medio, storia 5–19 | 0.4145 | 0.5010 |
 | τ medio, storia 20+ | 0.4813 | 0.5231 |
 
-Su Elec→Cloth avevo escluso la spiegazione banale — che siano utenti molto attivi ovunque: la correlazione con la storia nel dominio *source* era praticamente zero (+0.06), le due storie sono poco correlate tra loro (0.15), e controllando statisticamente per la storia source l'effetto restava identico (+0.42) in ogni fascia.
+Su Elec→Cloth ho escluso la spiegazione banale, cioè che siano utenti molto attivi ovunque. La correlazione con la storia nel dominio *source* è praticamente zero (+0.06), le due storie sono poco correlate tra loro (0.15), e controllando per la storia source l'effetto resta identico (+0.42) in ogni fascia.
 
-Su Cloth→Elec il segno si **replica**, ma l'effetto è circa quattro volte più debole.
+Su Cloth→Elec il segno **si replica**, ma l'effetto è quattro volte più debole.
 
-**Cosa significa.** La direzione dell'effetto è consistente su due run indipendenti, quindi difficilmente è un artefatto. La sua *intensità* però non è stabile, e va trattata come non stabilita. Se regge, mette in discussione la narrazione standard sul perché il cross-domain funziona: non è che il modello presta conoscenza a chi ne ha bisogno, ma che serve una base di dati locale sufficiente **prima** che il transfer possa agganciarsi a qualcosa.
+**Cosa significa.** La direzione è consistente su due run indipendenti, quindi difficilmente è un artefatto. L'intensità no, e va trattata come non stabilita. Se regge, ribalta la narrazione standard: non è che il modello presta conoscenza a chi ne ha bisogno, ma che serve una base locale sufficiente **prima** che il transfer possa agganciarsi a qualcosa.
 
 ---
 
 ## 4. Come vanno letti insieme
 
-I risultati 1 e 3 sono in tensione, ed è importante non nasconderlo.
+I risultati 1 e 3 sono in tensione.
 
-Il risultato 3 dà per buono che il canale "shared" rappresenti conoscenza trasferita. Ma il risultato 1 dice che quel canale resta identificabile per dominio al 98–99% in entrambi i run grandi. Quindi:
+Il risultato 3 assume che il canale "shared" contenga conoscenza trasferita. Il risultato 1 dice che quel canale resta identificabile per dominio al 98–99%. Quindi:
 
-- come **misura**, il risultato 3 è solido: i numeri sono quelli e il confondente principale è stato escluso;
-- come **interpretazione**, dipende da quanto ci fidiamo dell'etichetta "shared", e in questo momento non dovremmo fidarcene molto.
+- come **misura**, il risultato 3 è solido: i numeri sono quelli, il confondente principale è escluso;
+- come **interpretazione**, dipende dal fidarsi dell'etichetta "shared". Al momento non dovremmo.
 
-È anche il motivo per cui, come contributo scientifico, **il risultato 1 vale più del risultato 3**: il primo dice qualcosa sul modo in cui l'area valuta sé stessa, il secondo è un'osservazione empirica che vale finché l'architettura fa quello che dichiara.
+Per questo, come contributo scientifico **il risultato 1 vale più del risultato 3**: il primo dice qualcosa su come l'area valuta sé stessa, il secondo vale finché l'architettura fa quello che dichiara.
 
-Una nota che vale la pena tenere d'occhio: il run con il disentanglement **peggiore** (Cloth→Elec, probe al 99,8%) è anche quello che **raccomanda meglio** (Recall@20 0.0397 contro 0.0253). Non ne trarrei conclusioni, perché cambia il dominio target e quindi la difficoltà del task. Ma se reggesse a un confronto controllato, direbbe che il disentanglement non è ciò che fa funzionare il modello.
-
----
-
-## 5. Limiti da dichiarare
-
-- **Un solo checkpoint per configurazione, un solo seed.** Nulla è stato replicato con seed diversi.
-- I confronti tra run cambiano **più variabili insieme**: direzione del transfer, dominio target, e tre pesi di loss su quattro. Nessuno dei confronti qui è a variabile singola.
-- I dataset sono 10-core: **non contengono utenti davvero freddi**. Il risultato 3 riguarda utenti già attivi e non dice nulla sul cold-start vero.
-- τ descrive **come è composto** il punteggio, non cosa succederebbe togliendo un canale e ricalcolando la classifica. Quel controfattuale è una domanda diversa.
-- τ alto **non** significa che la raccomandazione sia migliore grazie al transfer. È un'attribuzione, non una valutazione.
-- La scomposizione esatta richiede `fuse_mode='attention'`. È la configurazione dei setting del paper, ma resta una restrizione.
-- Solo gli utenti sovrapposti tra i due domini hanno un τ definito.
-- I probe sono **a soffitto** (98–100%) nei due run grandi: in quella zona lo strumento non distingue più configurazioni diverse, e il confronto va appoggiato sul gap di dCor.
-- Il gap di dCor dipende dal numero di utenti campionati, quindi è confrontabile tra checkpoint solo a `--dcor_sample` uguale. CDs→Instruments ha meno utenti sovrapposti del campione e resta fuori confronto.
-- Una previsione sbagliata, annotata per onestà: mi aspettavo che su Cloth→Elec τ fosse più schiacciato verso il basso. È risultato invece più alto (0.503 contro 0.425) e con più raccomandazioni transfer-driven. Non avevo una buona ragione per quell'aspettativa.
-- Un'affermazione ritirata: in una versione precedente avevo scritto che *ogni* misura di indipendenza peggiora aumentando `cl_org_weight`. Con lo strumento corretto il probe lineare è di fatto invariato (98.82% → 98.76%) e solo il gap di dCor peggiora in modo apprezzabile. La conclusione corretta è che l'ortogonalità non compra indipendenza, non che la distrugga.
+Un dettaglio da tenere d'occhio: il run con il disentanglement **peggiore** (Cloth→Elec, probe al 99,8%) è quello che **raccomanda meglio** (Recall@20 0.0397 contro 0.0253). Non ne trarrei conclusioni — cambia il dominio target, e quindi la difficoltà. Ma se reggesse a un confronto controllato, direbbe che il disentanglement non è ciò che fa funzionare il modello.
 
 ---
 
-## 6. Prossimi passi, in ordine di priorità
+## 5. Limiti
 
-**1. Sweep controllato su `cl_org_weight`.** È l'esperimento che scioglie il nodo del risultato 1. Una sola direzione, tutto fisso, solo quel peso che varia su `{0.01, 0.1, 1, 10}`. Quattro run da ~1h35m. Se il probe MLP sale monotonicamente mentre il coseno scende, il risultato è dimostrato in modo pulito e non attaccabile — ed è il contributo principale del paper. Con i dati attuali resta un'osservazione suggestiva ma confondata.
+- **Un checkpoint per configurazione, un seed.** Niente è stato replicato.
+- I confronti cambiano **più variabili insieme**: direzione, dominio target, tre pesi di loss su quattro. Nessun confronto qui è a variabile singola.
+- I dataset sono 10-core: **nessun utente davvero freddo**. Il risultato 3 riguarda utenti già attivi e non dice nulla sul cold-start.
+- τ descrive **come è composto** il punteggio, non cosa succederebbe togliendo un canale e ricalcolando la classifica.
+- τ alto **non** significa raccomandazione migliore. È un'attribuzione, non una valutazione.
+- La scomposizione esatta richiede `fuse_mode='attention'`.
+- Solo gli utenti sovrapposti hanno un τ definito.
+- I probe sono **a soffitto** (98–100%) nei due run grandi: lì non distinguono più configurazioni diverse.
+- Il gap di dCor dipende dal numero di utenti campionati: confrontabile solo a `--dcor_sample` uguale. CDs→Instruments resta fuori confronto.
+- **Previsione sbagliata**, annotata per onestà: mi aspettavo τ più basso su Cloth→Elec. È uscito più alto (0.503 contro 0.425), con più raccomandazioni transfer-driven. Non avevo una buona ragione per aspettarmelo.
+- **Affermazione ritirata**: avevo scritto che *ogni* misura di indipendenza peggiora aumentando `cl_org_weight`. Con lo strumento corretto il probe lineare è invariato (98.82% → 98.76%), e solo il gap di dCor peggiora. La conclusione giusta è che l'ortogonalità non compra indipendenza, non che la distrugga.
 
-**2. Replica con più seed**, per capire quanto sono stabili τ e la correlazione con la storia — soprattutto dopo che il risultato 3 si è indebolito da +0.41 a +0.11.
+---
 
-**3. Verifica dell'ipotesi sulla forma della loss di ortogonalità**: penalizza il prodotto scalare grezzo, che resta piccolo quando i vettori sono piccoli, indipendentemente dall'angolo. Una versione normalizzata potrebbe comportarsi diversamente.
+## 6. Prossimi passi
 
-**4. Controfattuale**: azzerare il canale shared e ricalcolare le classifiche, per passare dall'attribuzione alla causalità.
+**1. Sweep controllato su `cl_org_weight`.** È l'esperimento che chiude il risultato 1. Una direzione sola, tutto fisso, solo quel peso su `{0.01, 0.1, 1, 10}`. Quattro run da ~1h35m. Da valutare sul **gap di dCor**, non sui probe, che saturano. Se il gap non scende mentre il coseno crolla, il risultato è dimostrato e non attaccabile — ed è il contributo principale del paper. Oggi resta suggestivo ma confondato.
 
-**5. Effetto della semantic loss.** `semantic_loss_weight` tira il canale shared degli item verso l'embedding testuale del prodotto. Ma il testo di un prodotto è fortemente indicativo del dominio, quindi quella loss potrebbe iniettare informazione di dominio proprio nel canale che dovrebbe esserne privo. Nei tre run era disattivata, quindi non spiega nulla di quanto sopra — ma accenderla e misurare il probe è un esperimento a costo quasi zero.
+**2. Replica con più seed**, per capire quanto sono stabili τ e la correlazione con la storia. Serve soprattutto dopo che il risultato 3 è sceso da +0.41 a +0.11.
+
+**3. Test sulla forma della loss di ortogonalità.** Penalizza il prodotto scalare grezzo, che resta piccolo quando i vettori sono piccoli, a prescindere dall'angolo. Una versione normalizzata potrebbe comportarsi diversamente.
+
+**4. Controfattuale.** Azzerare il canale shared, ricalcolare le classifiche, e passare dall'attribuzione alla causalità.
+
+**5. Effetto della semantic loss.** `semantic_loss_weight` tira il canale shared degli item verso l'embedding testuale del prodotto. Ma il testo di un prodotto dice chiaramente di che dominio è, quindi quella loss potrebbe iniettare informazione di dominio proprio dove non dovrebbe essercene. Nei tre run era spenta, quindi non spiega nulla di quanto sopra. Accenderla e misurare il probe costa quasi zero.
