@@ -72,30 +72,54 @@ Il primo era nato come prova tecnica per validare il codice; gli altri due sono 
 
 ## 3. I tre risultati
 
-### Risultato 1 — Ortogonalità e indipendenza si muovono in direzioni opposte
+### 3.0 — Premessa: lo strumento di misura era difettoso
 
-È il risultato principale, e il terzo run lo ha rafforzato parecchio.
+Prima dei risultati va detto che `evaluate_disentanglement.py`, con cui misuriamo tutto quanto segue, aveva tre difetti. La matematica di dCor era corretta (verificata su casi noti: restituisce esattamente 1 per input identici, riscalati e ruotati), ma la misurazione attorno no — e **tutti e tre i difetti facevano sembrare il modello più disentangled di quanto sia**.
+
+1. **I probe giravano su feature non standardizzate.** Con valori intorno a 0.02, la penalità L2 di default dominava e i classificatori andavano in underfitting. Non davano warning: semplicemente non usavano il segnale disponibile. Su Elec→Cloth il probe lineare legge 98.82% con lo scaler contro 81.79% senza: **diciassette punti di sottostima**.
+2. **dCor era confrontato con uno zero irraggiungibile.** È la forma V-statistic, positivamente distorta a N finito e alta dimensione: due gaussiane *indipendenti* con N=5000 e D=256 danno dCor = 0.41. Un valore grezzo non è quindi interpretabile. Ora lo script permuta le righe di uno dei due spazi per ottenere il null empirico e riporta lo scarto.
+3. **La matrice delle distanze occupava ~19 GB** a 35k utenti. Ora campiona (il sotto-campione a 5.000 sposta la stima di un centesimo).
+
+**Perché questo è esso stesso un risultato.** Il difetto numero 1 avrebbe portato a concludere che Elec→Cloth aveva un "disentanglement score" del 18%, cioè mediocre ma non nullo. Il valore vero è 1.18%. Un probe sotto-specificato è un modo silenzioso e facilissimo di sovrastimare il disentanglement, e va tenuto presente leggendo la letteratura che riporta questo tipo di metriche.
+
+### Risultato 1 — L'ortogonalità non compra indipendenza
+
+È il risultato principale.
 
 Il modello viene addestrato a rendere i due canali **perpendicolari**, cosa che misuriamo con il coseno. Ma l'obiettivo scientifico non è la perpendicolarità: è che il canale *shared* abbia davvero dimenticato da quale dominio viene. Questo si misura in altro modo — con la distance correlation e chiedendo a un classificatore di indovinare il dominio guardando solo quel canale.
+
+I numeri qui sotto sono quelli **ricalcolati** dopo la correzione dello strumento di misura descritta in §3.0; le versioni precedenti di questo documento riportavano valori che sottostimavano la fuga di informazione.
 
 | | CDs→Instruments | Elec→Cloth | **Cloth→Elec** |
 |---|---|---|---|
 | `cl_org_weight` | 1 | 0.1 | **1** |
 | Coseno (target) — *ideale 0* | 0.9973 | 0.0365 | **0.0119** |
-| dCor (target) — *ideale 0* | 0.9989 | 0.7434 | **0.7807** |
-| Probe lineare su e^c — *ideale 50%* | 85.4% | 81.8% | **85.8%** |
-| Probe MLP su e^c — *ideale 50%* | 93.3% | 98.7% | **99.8%** |
-| Disent. score MLP — *ideale >35%* | −0.27% | 1.34% | **0.24%** |
+| dCor gap sul null (target) — *ideale 0* | +0.680 ⚠️ | +0.649 | **+0.673** |
+| dCor gap sul null (source) — *ideale 0* | +0.693 ⚠️ | +0.647 | **+0.763** |
+| Probe lineare su e^c — *ideale 50%* | 92.5% ⚠️ | 98.82% | **98.76%** |
+| Probe MLP su e^c — *ideale 50%* | 90.4% ⚠️ | 99.13% | **99.77%** |
+| Disent. score lineare — *ideale >35%* | 0.99% | 1.18% | **1.24%** |
+| Disent. score MLP — *ideale >35%* | −0.72% | 0.87% | **0.23%** |
 
-Confrontando le due direzioni: decuplicando il peso della regolarizzazione, l'ortogonalità **migliora di tre volte** (coseno da 0.036 a 0.012) — la loss fa esattamente il suo mestiere. E **ogni singola misura di indipendenza reale peggiora**: dCor sale, entrambi i probe salgono, il punteggio di disentanglement scende.
+⚠️ CDs→Instruments ha solo 1.842 utenti sovrapposti contro i 5.000 campionati negli altri due, e la baseline del null dipende da quel numero: la sua colonna **non è confrontabile** con le altre due. Le due direzioni Elec/Cloth invece sì.
 
-Non è solo che spingere di più non aiuta. Spingere di più fa danno. Nel run con la regolarizzazione più forte il canale che dovrebbe aver dimenticato il dominio è identificabile al **99,76%**, praticamente perfetto.
+Confrontando le due direzioni comparabili: decuplicando il peso della regolarizzazione, l'ortogonalità **migliora di tre volte** (coseno da 0.036 a 0.012) — la loss fa esattamente il mestiere per cui è scritta. E l'indipendenza reale **non migliora di nulla**:
+
+- il probe lineare resta inchiodato (98.82% → 98.76%, differenza nel rumore);
+- il probe non lineare peggiora leggermente (99.13% → 99.77%);
+- il gap di dCor peggiora, in modo più marcato sul lato source (+0.647 → +0.763).
+
+I probe sono ormai a soffitto — con il canale specific al 100% e quello shared sopra il 98%, non c'è quasi spazio per peggiorare, quindi la misura più informativa qui è il gap di dCor, che è l'unica a muoversi in modo apprezzabile. E si muove nella direzione sbagliata.
+
+La lettura onesta è quindi: **la manopola dell'ortogonalità non compra indipendenza a nessun prezzo.** Decuplicandola si ottiene esattamente ciò che penalizza — vettori più perpendicolari — e zero progresso su ciò che serviva. Nel run con la regolarizzazione più forte il canale che dovrebbe aver dimenticato il dominio è identificabile al **99,77%**.
 
 **L'analogia.** Prendi dei punti disposti su una circonferenza. La coordinata x e la y hanno correlazione zero, sono "perpendicolari" in senso statistico. Eppure conoscendo la x sai esattamente quanto vale la y a meno del segno. Sono **scorrelate ma tutt'altro che indipendenti**. Il modello ottimizza una funzione che azzera il prodotto scalare, e ottiene precisamente quello: prodotto scalare zero. Non l'indipendenza, che era ciò che serviva.
 
 **Cosa significa.** Le metriche con cui la comunità valuta il disentanglement possono dare risultati ottimi mentre l'obiettivo resta mancato — e peggiorare proprio mentre migliorano. È un problema metodologico che riguarda l'area, non un difetto di questa implementazione.
 
 > **Il confondente da dichiarare.** Tra i due run grandi non è cambiato solo `cl_org_weight` (0.1 → 1). Anche `cl_sim_weight` e `item_cl_weight` sono scesi da 0.1 a 0.01. `cl_sim_weight` è la loss che **allinea** le common features tra i domini: indebolendola di dieci volte, è del tutto plausibile che il canale shared trattenga più informazione di dominio. Questa spiegazione alternativa è, con i dati attuali, altrettanto valida della mia. E due run sono due punti: non stabiliscono un andamento. Vedi la sezione 6, esperimento 1.
+>
+> **Un effetto soffitto.** Con i probe sopra il 98% in entrambe le direzioni, gran parte del confronto avviene in una zona dove lo strumento non ha più risoluzione. Lo sweep controllato andrebbe quindi valutato guardando il gap di dCor, non i probe, oppure introducendo un probe più debole (meno capacità, meno dati) che non saturi.
 
 ### Risultato 2 — Lo strumento misura qualcosa di reale, e distingue il collasso
 
@@ -160,7 +184,10 @@ Una nota che vale la pena tenere d'occhio: il run con il disentanglement **peggi
 - τ alto **non** significa che la raccomandazione sia migliore grazie al transfer. È un'attribuzione, non una valutazione.
 - La scomposizione esatta richiede `fuse_mode='attention'`. È la configurazione dei setting del paper, ma resta una restrizione.
 - Solo gli utenti sovrapposti tra i due domini hanno un τ definito.
+- I probe sono **a soffitto** (98–100%) nei due run grandi: in quella zona lo strumento non distingue più configurazioni diverse, e il confronto va appoggiato sul gap di dCor.
+- Il gap di dCor dipende dal numero di utenti campionati, quindi è confrontabile tra checkpoint solo a `--dcor_sample` uguale. CDs→Instruments ha meno utenti sovrapposti del campione e resta fuori confronto.
 - Una previsione sbagliata, annotata per onestà: mi aspettavo che su Cloth→Elec τ fosse più schiacciato verso il basso. È risultato invece più alto (0.503 contro 0.425) e con più raccomandazioni transfer-driven. Non avevo una buona ragione per quell'aspettativa.
+- Un'affermazione ritirata: in una versione precedente avevo scritto che *ogni* misura di indipendenza peggiora aumentando `cl_org_weight`. Con lo strumento corretto il probe lineare è di fatto invariato (98.82% → 98.76%) e solo il gap di dCor peggiora in modo apprezzabile. La conclusione corretta è che l'ortogonalità non compra indipendenza, non che la distrugga.
 
 ---
 
