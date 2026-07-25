@@ -10,3 +10,5 @@ log_tensorboard/
 *.json
 json_datasets/
 test.py
+explainability_out/
+disentanglement_eval/
