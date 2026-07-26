@@ -1,163 +1,226 @@
 # Contributo 2 — Audit semantico dei sottospazi disentangled
 
-Piano di implementazione. Branch `explainability-1`, 26 luglio 2026.
+Piano rivisto dopo la Fase 1. Branch `explainability-2`, 26 luglio 2026.
+
+La prima versione di questo piano è stata in gran parte falsificata dai suoi
+stessi cancelli. Quello che segue è la versione che resta in piedi.
 
 ---
 
-## 1. Come è cambiata l'idea iniziale
+## 1. Cosa ha stabilito la Fase 1
 
-La proposta originale era: usare l'LLM per **dare un nome** alle direzioni dei sottospazi shared e specific, trasformando il disentanglement da numero opaco a oggetto ispezionabile.
+La Fase 1 doveva accertare che i sottospazi avessero struttura semantica prima
+di coinvolgere un LLM. Ha risposto, e ha risposto più di quanto le fosse stato
+chiesto.
 
-Quello che abbiamo misurato nel frattempo cambia due cose.
+### I due canali item sono la stessa struttura
 
-**Il test di leakage semantico come lo avevo immaginato non funziona.** L'idea era: mostrare all'LLM gli item del canale shared e chiedergli da quale dominio vengono. Ma gli item *appartengono* a un dominio: una chitarra e un CD si distinguono dal contenuto, non dalla rappresentazione. Il test sarebbe banale e non misurerebbe nulla del modello.
+Correlazione tra le matrici di similarità item-item indotte dai due canali,
+misura deterministica con null calibrato:
 
-**La domanda giusta è un'altra**, e nasce dal risultato principale. Sappiamo che un probe statistico riconosce il dominio dal canale shared al 99%. Non sappiamo se quella fuga di informazione sia **semanticamente reale**. Il Contributo 2 risponde a questo:
+| | coseno(e^c, e^s) | corr. delle strutture | null |
+|---|---|---|---|
+| Elec→Cloth (sano) | 0.0365 | **+0.9984** | +0.0002 |
+| CDs→Instr (collassato) | 0.9973 | +0.9997 | +0.0002 |
 
-> I concetti che il canale shared codifica sono davvero trasversali ai domini, o sono concetti specifici di dominio con un'etichetta sbagliata?
+Su questa misura il modello sano è indistinguibile da quello collassato.
 
-È il contributo naturale del lavoro fatto finora: §4.1 di `RISULTATI.md` dice che il canale non è statisticamente domain-invariant; questo dice se è o non è *semanticamente* condiviso.
+### La causa: i gate degli item hanno imparato la stessa cosa
 
----
+| gate | cos(gate_c, gate_s) | sovrapposizione | medie |
+|---|---|---|---|
+| utente | 0.0505 | 4.7% | 0.506 / 0.440 |
+| **item** | **0.9985** | **98.2%** | 0.849 / 0.852 |
 
-## 2. Le quattro misure
+Il disentanglement degli item **non avviene**, nemmeno nel modello che
+riproduce il paper. Sul lato utente i gate selezionano coordinate quasi
+disgiunte; sul lato item sono la stessa funzione.
 
-L'ordine conta: **M0 e M1 validano lo strumento**, M2 e M3 sono i risultati. Se lo strumento non regge, M2 e M3 sono rumore ben formattato.
+Questo non era mai emerso perché `evaluate_disentanglement.py` misura solo i
+canali utente. È un buco della valutazione esistente, ed è esso stesso un
+risultato da riportare.
 
-### M0 — Coerenza dei cluster, senza LLM
+### L'informazione di dominio è irremovibile per via lineare
 
-Prima di coinvolgere un LLM: i cluster nei sottospazi sono semanticamente coerenti *a prescindere*?
+Rimuovendo iterativamente le direzioni più discriminative (INLP) dal canale
+shared degli utenti:
 
-Per ogni cluster, si misura la similarità media tra gli embedding testuali (sentence-transformer, già disponibili) dei suoi item, contro la similarità di un cluster casuale della stessa dimensione.
-
-- Se i cluster non battono il caso, i sottospazi non hanno struttura semantica e il resto del contributo non ha basi.
-- È una misura puramente quantitativa e riproducibile, che non dipende da nessun LLM.
-
-### M1 — Validità delle etichette
-
-L'LLM legge titoli e categorie degli item di un cluster e produce un'etichetta. Ma un'etichetta plausibile non è un'etichetta corretta.
-
-**Test:** si tengono da parte alcuni item del cluster. Poi si mostra all'LLM l'etichetta e *N* insiemi di item — uno vero, gli altri da cluster diversi — e gli si chiede quale corrisponde. Accuratezza sopra il caso (1/N) significa che l'etichetta cattura davvero la direzione latente.
-
-Senza questo test, tutto il contributo è "abbiamo chiesto a un LLM e ha detto cose sensate".
-
-### M2 — Genericità di dominio dei concetti *(risultato principale)*
-
-Per ogni etichetta, un secondo LLM — **cieco** rispetto al sottospazio di provenienza — valuta quanto il concetto è legato a un dominio specifico.
-
-L'ipotesi che l'architettura implica: i concetti del canale **shared** dovrebbero essere generici ("regali per principianti", "prodotti di fascia alta", "estetica vintage"), quelli del canale **specific** dovrebbero essere legati al dominio ("accessori per chitarra", "capispalla invernali").
-
-La nostra previsione, dato il probe al 99%: **non ci sarà differenza apprezzabile**. Sarebbe la conferma semantica del risultato statistico, e chiuderebbe il cerchio.
-
-L'esito opposto sarebbe altrettanto pubblicabile e più interessante: se i concetti shared *sono* generici mentre il probe li riconosce al 99%, allora il probe sta leggendo regolarità non semantiche (norme, frequenze, popolarità) e **la metrica standard del disentanglement misura qualcosa che non è ciò che intende misurare**. Sarebbe il gemello del risultato sull'ortogonalità.
-
-### M3 — Corrispondenza cross-domain dei concetti
-
-`cl_sim_weight` esiste per **allineare** i canali comuni dei due domini. Se funziona, i concetti estratti dal source-shared devono corrispondere a quelli del target-shared: "rock anni '70" da un lato ↔ "chitarre elettriche e amplificatori valvolari" dall'altro.
-
-**Test:** si estraggono i concetti dai due lati separatamente, si chiede all'LLM di accoppiarli, e si misura l'accuratezza dell'accoppiamento contro un null (accoppiamento casuale). Come controllo negativo si ripete la stessa cosa sui canali **specific**, dove per costruzione non dovrebbe esserci corrispondenza.
-
-È la verifica semantica diretta di cosa compra la loss di allineamento — che è l'unico meccanismo del modello che punta all'invarianza di dominio.
-
----
-
-## 3. Prerequisiti
-
-| | stato | note |
+| iterazioni | probe lineare | probe MLP |
 |---|---|---|
-| Checkpoint non collassato con `item_disentangle=True` | ✅ | Cloth→Elec `cl_org_weight=1` |
-| Metadati del dominio target (Elec) | ❌ | da recuperare |
-| Metadati del dominio source (Cloth) | ❌ | da recuperare |
-| Risoluzione ID → token | ✅ | `metadata.py`, corretta e verificata 7241/7241 |
-| Embedding testuali per M0 | ⚠️ | esistono solo per CDs/Instruments, vanno rigenerati |
-| Endpoint LLM | ⚠️ | `verbalize.py` parla con qualunque endpoint OpenAI-compatible |
+| 0 | 98.82% | 99.63% |
+| 5 | **54.64%** | 98.16% |
+| 20 | **50.07%** | 98.28% |
+| 40 | 48.50% | 96.73% |
 
-**Il vincolo che decide tutto è il metadato.** L'unica coppia con metadati oggi è CDs/Instruments, ed è proprio quella con il modello collassato — inutile per un audit semantico, perché i due canali sono lo stesso vettore.
+Cinque direzioni contengono tutta l'informazione linearmente decodificabile.
+Toglierle porta un probe lineare al caso esatto e lascia un probe non lineare
+al 98%.
 
-Servono quindi i JSONL di **Elec** e **Cloth** dalla stessa fonte degli altri (Amazon Reviews 2023, file `meta_*.jsonl`).
+Ne segue perché ogni intervento provato finora ha fallito: l'ortogonalità è un
+vincolo lineare, l'allineamento è un coseno, il discriminatore avversariale era
+una rete piccola. **Sono tutti strumenti lineari o quasi, applicati a
+informazione che non è linearmente accessibile.**
 
-**Correzione a quanto avevo detto prima:** il bug di mappatura ID in `dgcdr.py` **non è un prerequisito**. Riguarda il caricamento degli embedding testuali dentro il modello, cioè la semantic loss durante il training. L'audit semantico legge i metadati tramite `metadata.py`, che ha già la mappatura corretta. Il bug va sistemato solo se si vuole *allenare* con supervisione testuale.
+E ne segue un avvertimento metodologico: chi valuta il disentanglement con un
+probe lineare, dopo un intervento del genere, legge 50% e conclude di aver
+avuto successo.
 
-**Nota sugli embedding per M0:** `extract_text_embeddings.py` oggi usa `all-mpnet-base-v2` (768 dim) mentre i `.pt` esistenti sono a 384, generati da un modello precedente. Per M0 va bene qualunque dei due, purché coerente — M0 non passa dal modello, quindi la dimensione hardcoded in `dgcdr.py` non c'entra.
+### Una previsione sbagliata, annotata
 
----
+Avevo previsto che proiettando via le componenti principali della base il probe
+sarebbe crollato. Rimosse le prime 50 su 256, resta al 98.6% (controllo con 50
+direzioni casuali: 98.3%). L'informazione non sta nelle direzioni ad alta
+varianza: è distribuita, e la ridondanza è più forte di quanto ipotizzassi.
 
-## 4. Implementazione
-
-Quattro file nuovi, nessuna modifica al modello.
-
-### `concepts.py` — estrazione
-
-```
-extract_concepts(decomposition, channel, domain, n_clusters, top_k)
-    -> list[Concept]
-```
-
-- prende gli item channel da `ChannelDecomposition` (già disponibili: `base`, `shared`, `specific`);
-- **restringe agli item che appartengono davvero al dominio** — target: `[1, target_num_items)`; source: overlap + `[target_num_items, total)`. Senza questo si clusterizzano embedding di item che nel dominio non esistono e che sono rimasti a zero;
-- normalizza L2 e applica k-means;
-- per ogni cluster estrae i `top_k` item più vicini al centroide, più un insieme *held-out* per M1;
-- restituisce oggetti `Concept` con: id cluster, item rappresentativi, item held-out, dimensione, varianza spiegata.
-
-Alternativa da riportare come ablation: direzioni principali (PCA) invece di cluster. I cluster sono più interpretabili, la PCA più fedele alla geometria del sottospazio.
-
-### `concept_naming.py` — etichettatura cieca
-
-```
-name_concept(concept, catalogue, client) -> str
-```
-
-Il prompt riceve **solo** titoli e categorie, mescolati. Mai: ID interni, nome del dominio, nome del canale, posizione nel ranking. L'LLM non deve poter indovinare da cosa sta guardando.
-
-Vincoli nel prompt: etichetta breve, niente elenchi, ammettere esplicitamente "nessun tema comune" quando il cluster è incoerente — quella risposta è un dato, non un fallimento.
-
-### `concept_eval.py` — le quattro misure
-
-```
-cluster_coherence(concepts, text_embeddings)        # M0, senza LLM
-label_validity(concepts, catalogue, client, n_way)  # M1
-domain_genericity(labels, client)                   # M2, cieco
-cross_domain_matching(src_concepts, tgt_concepts, client)  # M3
-```
-
-Ognuna restituisce anche il proprio **null**: cluster casuali per M0, scelta casuale per M1 e M3, e per M2 il confronto shared/specific è esso stesso il controllo.
-
-### `audit_concepts.py` — CLI
-
-Come `explain_dgcdr.py`: carica checkpoint, decompone, verifica, esegue le misure, scrive JSON + Markdown. Deve **rifiutarsi di girare se il modello è collassato** — con τ a deviazione < 0.01 o coseno > 0.9 i due canali sono lo stesso vettore e l'audit non ha oggetto.
+Il rango effettivo degli embedding è ~30 su 256 sia per utenti sia per item,
+con il 54–57% della varianza nelle prime dieci componenti. La struttura è
+fortemente a basso rango, ma l'identità di dominio non vive lì.
 
 ---
 
-## 5. Ordine di lavoro
+## 2. Cosa muore e cosa resta del piano originale
 
-**Fase 0 — sbloccare i prerequisiti.** Recuperare `meta_Electronics.jsonl` e `meta_Clothing.jsonl`; verificare che i token `parent_asin` coprano gli item del dataset (`metadata.py` lo dice già: percentuale di risoluzione). Rigenerare gli embedding testuali per Elec/Cloth per M0.
+**M2 — confronto tra concetti shared e specific: eliminata.** Presupponeva due
+canali distinti da confrontare. Sugli item ce n'è uno solo: l'LLM produrrebbe
+due liste identiche e la misura darebbe zero per costruzione, senza che quello
+zero significhi niente.
 
-**Fase 1 — estrazione e M0.** `concepts.py` + coerenza dei cluster. Nessun LLM. È il punto di controllo: se i cluster non battono il caso, il contributo si ferma qui e diventa un risultato negativo (i sottospazi non hanno struttura semantica).
+**M0 — coerenza dei cluster: assorbita e superata.** La correlazione tra
+strutture è più informativa della purezza dei cluster, è deterministica e non
+dipende da k-means. Resta come controllo secondario.
 
-**Fase 2 — naming e M1.** `concept_naming.py` + validità delle etichette. Secondo punto di controllo: se le etichette non superano il test *N*-way, lo strumento non è affidabile e va rivisto prima di procedere.
+**M1 — validità delle etichette: resta, indispensabile.** Senza, il resto è
+"abbiamo chiesto a un LLM e ha detto cose sensate".
 
-**Fase 3 — M2 e M3.** I risultati veri, una volta che lo strumento è validato.
-
-**Fase 4 — replica.** Almeno due LLM diversi (uno locale, uno via API) per mostrare che i risultati non dipendono dal generatore, e le stesse misure su una seconda coppia di domini.
-
-Le fasi 1 e 2 sono cancelli, non tappe: hanno un esito che può fermare il lavoro, ed è giusto così.
-
----
-
-## 6. Come questo contributo può fallire
-
-Vale la pena scriverlo prima, non dopo.
-
-- **I cluster non sono coerenti** (M0 fallisce) → i sottospazi non hanno struttura semantica leggibile. Risultato negativo pubblicabile, ma il contributo come progettato finisce.
-- **Le etichette non sono valide** (M1 fallisce) → lo strumento non misura; ogni risultato successivo è aneddotico.
-- **Nessuna differenza shared/specific** (M2 senza segnale) → è la nostra previsione, ed è un risultato: conferma semantica del probe al 99%.
-- **Circolarità** → l'LLM che nomina e quello che valuta devono essere separati e ciechi, altrimenti M2 misura la coerenza dell'LLM con sé stesso.
-- **Contaminazione da popolarità** → i cluster potrebbero riflettere la popolarità invece del contenuto. Va controllato correlando la dimensione dei cluster con la popolarità media degli item.
+**M3 — corrispondenza cross-domain: promossa a cuore del contributo.** Confronta
+i due *domini*, non i due canali, quindi il collasso dei gate non la tocca. È
+anche l'unica domanda rimasta a cui solo un LLM può rispondere.
 
 ---
 
-## 7. Cosa aggiunge al lavoro complessivo
+## 3. Il contributo ridefinito
 
-`RISULTATI.md` §5 dice che la spina dorsale si è spostata su "i meccanismi di DGCDR non fanno quello che il paper dichiara". Il Contributo 2 aggiunge il pezzo che manca: finora abbiamo mostrato che i meccanismi non funzionano **statisticamente**. Questo mostra se il fallimento è anche **semantico** — e se le metriche standard misurino ciò che dichiarano.
+> `cl_sim_weight` esiste per allineare i canali comuni dei due domini. È l'unico
+> meccanismo di DGCDR che punta all'invarianza di dominio. **Compra un
+> allineamento semantico reale?**
 
-È anche l'unico pezzo del lavoro in cui l'LLM fa qualcosa che nessun altro strumento può fare: leggere il contenuto degli item e giudicare se un concetto è legato a un dominio. Nel Contributo 1 l'LLM era accessorio, e questo ne è stato il limite.
+I concetti estratti dal canale shared del dominio source devono corrispondere a
+quelli del target: "rock anni '70" da un lato deve trovare "chitarre elettriche
+e amplificatori valvolari" dall'altro. Se non corrispondono, l'allineamento è
+una coincidenza geometrica senza contenuto.
+
+È la domanda naturale dopo aver stabilito che l'ortogonalità non separa nulla:
+l'altra metà del meccanismo funziona?
+
+---
+
+## 4. Le misure
+
+### M1 — Validità delle etichette *(cancello)*
+
+Si tengono da parte alcuni item del cluster. Si mostra all'LLM l'etichetta e *N*
+insiemi di item, uno vero e gli altri da cluster diversi, e gli si chiede quale
+corrisponde. Accuratezza sopra 1/N significa che l'etichetta cattura davvero il
+cluster.
+
+Se fallisce, lo strumento non misura e M3 non è interpretabile.
+
+### M3 — Corrispondenza cross-domain *(risultato principale)*
+
+1. Estrarre i concetti dagli item **source** usando il canale shared del source.
+2. Estrarre i concetti dagli item **target** usando il canale shared del target.
+3. Nominarli separatamente e alla cieca (mai il nome del dominio nel prompt).
+4. Chiedere a un secondo LLM di accoppiarli.
+5. Confrontare con due riferimenti.
+
+| riferimento | cosa dice |
+|---|---|
+| accoppiamento casuale | il null: quanto si ottiene per caso |
+| stessa misura sul canale **base** | quanto si otterrebbe **senza** disentanglement |
+
+Il secondo è il controllo che conta. Il canale base è l'embedding GNN grezzo,
+senza alcuna separazione: se i concetti shared non si accoppiano meglio di
+quelli base, **la loss di allineamento non ha aggiunto nulla di semantico**.
+
+### M4 — Mappa concettuale descrittiva *(secondario)*
+
+Poiché sugli item esiste una sola struttura, ha comunque senso dire *cosa*
+codifica. Non è un test, è una descrizione — ma è la risposta leggibile alla
+domanda "cosa rappresenta davvero il modello", e serve al lettore del paper.
+
+---
+
+## 5. Prerequisiti
+
+| | stato |
+|---|---|
+| Checkpoint sano con `item_disentangle=True` | ✅ Elec→Cloth locale |
+| Metadati Elec + Cloth | ✅ in cache, 135.217 item, risoluzione 100% |
+| Risoluzione ID → token | ✅ verificata |
+| Estrazione dei concetti | ✅ `concepts.py` |
+| Endpoint LLM | ⚠️ serve, `verbalize.py` parla con qualunque endpoint OpenAI-compatible |
+
+Il vincolo dei metadati, che nella prima versione del piano bloccava tutto, è
+risolto: il caricamento filtrato in streaming impiega 38 secondi sui 23 GB di
+dump.
+
+---
+
+## 6. Implementazione
+
+`concepts.py` esiste già. Restano:
+
+**`concept_naming.py`** — etichettatura cieca. Il prompt riceve solo titoli e
+categorie, mescolati; mai ID, nome del dominio, nome del canale o posizione nel
+ranking. Deve poter rispondere "nessun tema comune": quella risposta è un dato.
+
+**`concept_eval.py`** — `label_validity` (M1) e `cross_domain_matching` (M3),
+ciascuna con il proprio null.
+
+**`audit_concepts.py`** — CLI sul modello di `explain_dgcdr.py`. Deve rifiutarsi
+di girare su un modello collassato, e ora sappiamo che il controllo va fatto
+**per canale**: sugli item di questo checkpoint la correlazione tra strutture è
+0.9984, quindi lo script deve dirlo invece di procedere in silenzio.
+
+---
+
+## 7. Fasi
+
+**Fase 2 — naming e M1.** Cancello: se le etichette non superano il test *N*-way,
+ci si ferma e si rivede lo strumento.
+
+**Fase 3 — M3.** Il risultato, con entrambi i riferimenti (casuale e canale base).
+
+**Fase 4 — M4 e replica.** Mappa descrittiva, due LLM diversi, e se possibile una
+seconda coppia di domini.
+
+---
+
+## 8. Come può fallire
+
+- **Le etichette non sono valide** (M1) → lo strumento non misura, ci si ferma.
+- **I concetti shared si accoppiano come quelli base** → l'allineamento non
+  aggiunge nulla. È il risultato che mi aspetto, ed è pubblicabile.
+- **Nessuno dei due si accoppia sopra il caso** → i sottospazi non hanno
+  corrispondenza cross-domain di alcun tipo; risultato più forte, ma va escluso
+  che dipenda da cluster incoerenti (per questo M1 viene prima).
+- **Circolarità** → l'LLM che nomina e quello che accoppia devono essere separati
+  e ciechi.
+- **Contaminazione da popolarità** → i cluster potrebbero riflettere la
+  popolarità invece del contenuto. Da controllare correlando dimensione dei
+  cluster e popolarità media.
+
+---
+
+## 9. Nota onesta sul ruolo dell'LLM
+
+I risultati più forti raccolti finora — collasso dei gate item, struttura
+identica dei due canali, irremovibilità lineare dell'informazione di dominio —
+**non hanno richiesto alcun LLM**. Sono misure di algebra lineare con il
+proprio null.
+
+Il Contributo 2 resta l'unico punto in cui un LLM fa qualcosa che nessun altro
+strumento può fare: leggere il contenuto dei prodotti e giudicare se due insiemi
+di concetti, estratti da domini diversi, parlino della stessa cosa. Vale la pena
+tenerlo, ma con l'aspettativa giusta: è una misura in più, non la spina dorsale
+del lavoro.
