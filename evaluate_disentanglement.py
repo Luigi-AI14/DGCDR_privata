@@ -195,6 +195,17 @@ def evaluate_embeddings(model_path, output_dir='disentanglement_eval',
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     readable_timestamp = datetime.strptime(timestamp, '%Y%m%d_%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
 
+    # Echo the weights the checkpoint was trained with. Without this a sweep
+    # produces reports that cannot be told apart, and the log files have to be
+    # consulted to find out which point each one is.
+    hyper = " | ".join(
+        f"{name}={config[name]}" for name in
+        ('cl_sim_weight', 'cl_org_weight', 'cl_decoder_weight', 'item_cl_weight',
+         'temperature', 'fuse_mode')
+        if config[name] is not None
+    )
+    domains = f"{config['source_domain']['dataset']} -> {config['target_domain']['dataset']}"
+
     # Generate Text Report with unique name
     report = f"""
 ======================================================================
@@ -202,6 +213,8 @@ def evaluate_embeddings(model_path, output_dir='disentanglement_eval',
 ======================================================================
 Model Checkpoint    : {model_name}
 Timestamp           : {readable_timestamp}
+Domains             : {domains}
+Hyper-parameters    : {hyper}
 
 1. FEATURE INDEPENDENCE METRICS (e^c vs e^s)
 ----------------------------------------------------------------------
