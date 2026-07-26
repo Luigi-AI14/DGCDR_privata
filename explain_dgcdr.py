@@ -121,7 +121,63 @@ def summarise(explanations, min_magnitude_ratio=0.1):
             k: {'mean_tau': float(np.mean(v)), 'n': len(v)}
             for k, v in sorted(by_history.items())
         },
+        **_hit_statistics(reliable),
     }
+
+
+def _hit_statistics(attributions):
+    """Split tau by whether the recommendation was actually a hit.
+
+    If transferred and native preference were serving different purposes, hits
+    and misses would sit at different tau. Whether they do is a question the
+    attribution can answer and the accuracy metrics cannot.
+    """
+    hits = [a.tau for a in attributions if a.relevant]
+    misses = [a.tau for a in attributions if a.relevant is False]
+    if not attributions:
+        return {}
+
+    stats = {
+        'n_hits': len(hits),
+        'hit_rate': len(hits) / len(attributions),
+        'tau_hits': float(np.mean(hits)) if hits else None,
+        'tau_misses': float(np.mean(misses)) if misses else None,
+    }
+    if hits and misses:
+        stats['tau_hits_minus_misses'] = stats['tau_hits'] - stats['tau_misses']
+    return stats
+
+
+def _profile_lines(explanation, catalogue):
+    """What this user likes on each side, and what they are being offered.
+
+    Three category profiles side by side let a reader judge whether the
+    recommendation is sensible at all -- something no attribution number can
+    convey on its own.
+    """
+    if not catalogue.has_metadata():
+        return [
+            f"- source-domain history: {len(explanation.source_history)} items",
+            f"- target-domain history: {len(explanation.history)} items",
+            f"- held-out items: {explanation.ground_truth}",
+            "",
+        ]
+
+    sections = [
+        ("Likes in the SOURCE domain", explanation.source_history),
+        ("Likes in the TARGET domain", explanation.history),
+        ("Held out (what we should predict)", explanation.ground_truth),
+        ("Recommended here", [a.item_id for a in explanation.attributions]),
+    ]
+
+    lines = ["| | categories | examples |", "|---|---|---|"]
+    for label, item_ids in sections:
+        categories, titles = catalogue.profile(item_ids)
+        rendered = ", ".join(f"{name} ({count})" for name, count in categories) or "—"
+        examples = "; ".join(titles) or "—"
+        lines.append(f"| **{label}** ({len(item_ids)}) | {rendered} | {examples} |")
+    lines.append("")
+    return lines
 
 
 def write_markdown(path, explanations, summary, verification, catalogue):
@@ -156,6 +212,19 @@ def write_markdown(path, explanations, summary, verification, catalogue):
         f"- transfer-driven (tau>=0.6): {summary.get('share_transfer_driven', 0) * 100:.2f}%",
         f"- native-driven (tau<=0.4): {summary.get('share_native_driven', 0) * 100:.2f}%",
         "",
+        "### Hits vs misses",
+        "",
+        f"- recommendations that were in the held-out set: {summary.get('n_hits', 0)} "
+        f"({summary.get('hit_rate', 0) * 100:.2f}%)",
+        f"- mean tau on hits  : {summary['tau_hits']:.4f}"
+        if summary.get('tau_hits') is not None else "- mean tau on hits  : n/a",
+        f"- mean tau on misses: {summary['tau_misses']:.4f}"
+        if summary.get('tau_misses') is not None else "- mean tau on misses: n/a",
+        (f"- difference: {summary['tau_hits_minus_misses']:+.4f} "
+         f"(a gap would mean transferred and native preference serve "
+         f"different purposes)")
+        if summary.get('tau_hits_minus_misses') is not None else "",
+        "",
         "### Mean tau by target-domain history length",
         "",
         "| history length | mean tau | n |",
@@ -174,15 +243,20 @@ def write_markdown(path, explanations, summary, verification, catalogue):
             + (f" (`{explanation.user_token}`)" if explanation.user_token else ""),
             "",
             f"- mean transfer ratio: **{explanation.mean_tau:.3f}**",
-            f"- target-domain history: {len(explanation.history)} items",
-            f"- held-out items: {explanation.ground_truth}",
+            f"- hits in this list: **{explanation.n_hits}** of "
+            f"{len(explanation.attributions)} "
+            f"({len(explanation.ground_truth)} held-out items in total)",
             "",
-            "| rank | item | score | shared | specific | tau | driven by |",
-            "|---|---|---|---|---|---|---|",
+        ]
+        lines += _profile_lines(explanation, catalogue)
+        lines += [
+            "| rank | ok | item | score | shared | specific | tau | driven by |",
+            "|---|---|---|---|---|---|---|---|",
         ]
         for a in explanation.attributions:
+            hit = "**✓**" if a.relevant else ""
             lines.append(
-                f"| {a.rank} | {catalogue.describe(a.item_id, max_len=60)} | "
+                f"| {a.rank} | {hit} | {catalogue.describe(a.item_id, max_len=60)} | "
                 f"{a.score:+.4f} | {a.user_channel_totals.get(SHARED, 0):+.4f} | "
                 f"{a.user_channel_totals.get(SPECIFIC, 0):+.4f} | {a.tau:.3f} | "
                 f"{a.dominant_channel} |"
@@ -276,6 +350,7 @@ def main():
             mask_history=not args.no_mask_history,
             user_token=user_token,
             ground_truth=ground_truth.get(user_id, []),
+            source_history=source_history(model, user_id),
         ))
 
     summary = summarise(explanations, args.tau_min_magnitude_ratio)

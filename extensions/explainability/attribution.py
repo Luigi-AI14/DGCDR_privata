@@ -46,6 +46,9 @@ class ItemAttribution:
         self.tau_full = tau_full
         self.magnitude = magnitude
         self.rank = rank
+        # True when the item is in the user's held-out set, i.e. the
+        # recommendation was a hit. Set by explain_user.
+        self.relevant = None
 
     @property
     def dominant_channel(self):
@@ -58,6 +61,7 @@ class ItemAttribution:
         return {
             'item_id': self.item_id,
             'rank': self.rank,
+            'relevant': self.relevant,
             'score': self.score,
             'transfer_ratio': self.tau,
             'transfer_ratio_full': self.tau_full,
@@ -73,13 +77,14 @@ class UserExplanation:
     """All attributions for one user's recommendation list."""
 
     def __init__(self, user_id, user_token, attributions, is_overlapping,
-                 ground_truth=None, history=None):
+                 ground_truth=None, history=None, source_history=None):
         self.user_id = user_id
         self.user_token = user_token
         self.attributions = attributions
         self.is_overlapping = is_overlapping
         self.ground_truth = ground_truth or []
         self.history = history or []
+        self.source_history = source_history or []
 
     @property
     def mean_tau(self):
@@ -87,14 +92,20 @@ class UserExplanation:
             return 0.0
         return sum(a.tau for a in self.attributions) / len(self.attributions)
 
+    @property
+    def n_hits(self):
+        return sum(1 for a in self.attributions if a.relevant)
+
     def to_dict(self):
         return {
             'user_id': self.user_id,
             'user_token': self.user_token,
             'is_overlapping': self.is_overlapping,
             'mean_transfer_ratio': self.mean_tau,
+            'n_hits': self.n_hits,
             'ground_truth_items': self.ground_truth,
             'history_items': self.history,
+            'source_history_items': self.source_history,
             'recommendations': [a.to_dict() for a in self.attributions],
         }
 
@@ -237,12 +248,15 @@ def recommend(model, decomposition, user_id, topk=10, mask_history=True):
 
 
 def explain_user(model, decomposition, user_id, topk=10, mask_history=True,
-                 user_token=None, ground_truth=None):
+                 user_token=None, ground_truth=None, source_history=None):
     """Produce the full attributed recommendation list for one user."""
     item_ids, history = recommend(model, decomposition, user_id, topk, mask_history)
     attributions = attribute_scores(decomposition, user_id, item_ids)
+
+    held_out = set(ground_truth or [])
     for rank, attribution in enumerate(attributions, start=1):
         attribution.rank = rank
+        attribution.relevant = attribution.item_id in held_out
 
     return UserExplanation(
         user_id=user_id,
@@ -251,4 +265,5 @@ def explain_user(model, decomposition, user_id, topk=10, mask_history=True,
         is_overlapping=bool(decomposition.overlap_mask[user_id].item()),
         ground_truth=ground_truth,
         history=history,
+        source_history=source_history,
     )
