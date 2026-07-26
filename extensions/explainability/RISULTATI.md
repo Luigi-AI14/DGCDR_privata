@@ -1,245 +1,285 @@
-# Attribuzione esatta in DGCDR — pipeline, risultati, conclusioni sul Contributo 1
+# Cosa abbiamo fatto e cosa abbiamo trovato
 
-Documento di lavoro, aggiornato al 26 luglio 2026. Branch `explainability-1`.
-Cinque checkpoint analizzati: CDs→Instruments, Elec→Cloth, e Cloth→Elec a tre
-valori di `cl_org_weight`.
-
----
-
-## 1. Cosa fa la pipeline
-
-DGCDR divide i gusti di ogni utente in due parti:
-
-- **shared** — i gusti che l'utente porta dall'altro dominio;
-- **specific** — i gusti che valgono solo nel dominio in cui stiamo raccomandando.
-
-Poi le rimette insieme e calcola un punteggio per ogni prodotto.
-
-La pipeline fa una cosa sola: **riapre quel punteggio e dice quanta parte viene da ciascuna delle due**.
-
-Il risultato è **τ (transfer ratio)**, un numero tra 0 e 1, calcolato per ogni singola raccomandazione:
-
-- **τ ≈ 1** → "ti consiglio questo perché ho capito i tuoi gusti nell'altro dominio"
-- **τ ≈ 0** → "ti consiglio questo per come ti sei comportato qui"
-- **τ ≈ 0.5** → le due cose pesano uguale
-
-### Perché non è il solito explainer
-
-Gli explainer basati su LLM passano all'LLM la cronologia dell'utente e chiedono una motivazione plausibile. Il testo suona bene, ma **niente garantisce che c'entri con quello che il modello ha calcolato**.
-
-Qui il meccanismo è aritmetico. DGCDR somma le sue componenti e il punteggio è un prodotto scalare, quindi si spacca in modo esatto:
-
-```
-punteggio = (contributo shared) + (contributo specific) + (contributo collaborativo grezzo)
-```
-
-Non è una stima e non è un surrogato come LIME o SHAP: è la stessa aritmetica del modello, riscritta. Ogni esecuzione ricompone i pezzi e li confronta con l'output vero; se non tornano, si ferma. Sui cinque checkpoint l'errore relativo sta tra 1e-07 e 3e-07.
-
-L'LLM arriva **dopo**: riceve i numeri e li traduce in linguaggio naturale, con il divieto di contraddirli.
-
-### I pezzi
-
-| file | cosa fa |
-|---|---|
-| `channels.py` | riapre gli embedding nelle componenti e verifica che tornino |
-| `attribution.py` | matrice dei contributi, τ, rilevanza delle raccomandazioni |
-| `metadata.py` | traduce gli ID in titoli e categorie leggibili (opzionale) |
-| `verbalize.py` | prompt vincolato e chiamata all'LLM (opzionale) |
-| `explain_dgcdr.py` | lo script da lanciare |
-| `test_decomposition.py` | autotest: 8 controlli, da rilanciare su ogni nuovo modello |
-
-La pipeline **non tocca il codice del modello**: usa solo le funzioni pubbliche di DGCDR.
-
-### Quando si rifiuta di funzionare
-
-Meglio un errore che una spiegazione falsa. Lo script si blocca con fusione non additiva (`fuse_mode='concat'`), disentanglement disattivato, o modello non in modalità valutazione.
+Documento di lavoro, 26 luglio 2026. Scritto per essere letto senza conoscere i
+dettagli tecnici.
 
 ---
 
-## 2. Gli esperimenti
+## 1. Il problema di partenza
 
-| | CDs→Instruments | Elec→Cloth | Cloth→Elec (×3) |
+DGCDR consiglia prodotti usando due negozi diversi. Per esempio: guarda cosa hai
+comprato da **Abbigliamento** per consigliarti meglio in **Elettronica**.
+
+Per farlo divide i tuoi gusti in due parti:
+
+- una parte che **vale in tutti e due i negozi** (il modello la chiama *shared*,
+  cioè condivisa);
+- una parte che **vale solo nel negozio in cui ti sta consigliando** (la chiama
+  *specific*, cioè specifica).
+
+L'idea è che la prima parte sia quella che "viaggia" da un negozio all'altro.
+Tutto il valore del modello sta in questa separazione.
+
+**La nostra domanda: questa separazione funziona davvero?**
+
+---
+
+## 2. Lo strumento che abbiamo costruito
+
+Il modello dà un punteggio a ogni prodotto e consiglia quelli col punteggio più
+alto. Noi abbiamo costruito uno strumento che **riapre quel punteggio** e dice
+quanta parte viene dalla prima parte e quanta dalla seconda:
+
+```
+punteggio = (quota della parte condivisa) + (quota della parte specifica) + (resto)
+```
+
+Da questo nasce un numero che chiamiamo **τ**, compreso tra 0 e 1:
+
+- **τ vicino a 1** → "ti consiglio questo per i tuoi gusti visti nell'altro negozio"
+- **τ vicino a 0** → "ti consiglio questo per come ti sei comportato qui"
+- **τ intorno a 0.5** → le due cose pesano uguale
+
+### Perché ci si può fidare di questo strumento
+
+Molti sistemi che "spiegano" le raccomandazioni funzionano così: danno a un
+programma di intelligenza artificiale la lista di quello che hai comprato e gli
+chiedono di inventare una spiegazione. La spiegazione suona bene, ma **nessuno
+garantisce che sia quella vera**.
+
+Il nostro strumento non inventa: rifà lo stesso conto che ha fatto il modello.
+Ogni volta che gira, **rimette insieme i pezzi e controlla che il totale torni**
+al punteggio originale. Se non torna, si ferma e non produce nulla. Sui cinque
+modelli provati l'errore è stato di circa un decimilionesimo, cioè solo
+arrotondamento nei calcoli.
+
+---
+
+## 3. La verifica più importante: i nostri modelli sono quelli veri
+
+Prima di criticare qualcosa bisogna essere sicuri di averlo ricostruito bene.
+Abbiamo confrontato i nostri modelli con i risultati pubblicati nell'articolo:
+
+| | articolo | nostro | differenza |
 |---|---|---|---|
-| utenti | 1.842 | 35.827 | 35.827 |
-| prodotti (target) | 3.610 | 72.669 | 62.548 |
-| interazioni (target) | ~16 mila | ~847 mila | ~812 mila |
-| iperparametri | default del repo | paper sez. 2.1 | paper sez. 2.2 |
-| `cl_org_weight` | 1 | 0.1 | **0.01 / 1 / 10** |
+| Abbigliamento (qualità dei consigli) | 0.0260 | 0.0253 | −2.7% |
+| Abbigliamento (seconda misura) | 0.0173 | 0.0173 | **0%** |
+| Elettronica (qualità dei consigli) | 0.0403 | 0.0397 | −1.5% |
+| Elettronica (seconda misura) | 0.0247 | 0.0244 | −1.2% |
 
-Il primo serviva a validare il codice. Gli altri sono gli esperimenti veri.
-
----
-
-## 3. Validazione: riproduciamo il paper
-
-Prima di qualunque conclusione va stabilito che stiamo misurando il DGCDR vero e non un training andato male. Confronto con la Tabella 3 del paper:
-
-| | | paper | nostro run | scarto |
-|---|---|---|---|---|
-| **Elec→Cloth** (target Cloth) | Recall | .0260 | .0253 | −2.7% |
-| | MRR | .0278 | .0281 | +1.1% |
-| | HR | .0876 | .0869 | −0.8% |
-| | NDCG | .0173 | .0173 | **0%** |
-| **Cloth→Elec** (target Elec) | Recall | .0403 | .0397 | −1.5% |
-| | MRR | .0353 | .0349 | −1.1% |
-| | HR | .1304 | .1276 | −2.1% |
-| | NDCG | .0247 | .0244 | −1.2% |
-
-Scarti tra l'1% e il 3%, cioè normale variabilità da seed. **Tutto quello che segue vale quindi per il modello pubblicato**, non per una nostra versione difettosa. È il punto che rende difendibile il resto del documento.
+Differenze tra l'1% e il 3%: è la normale variabilità quando si riallena un
+modello. **Quindi tutto quello che segue riguarda il modello vero, non una
+nostra versione fatta male.** È il punto che rende credibile il resto.
 
 ---
 
-## 4. I risultati
+## 4. Prima sorpresa: lo strumento di misura era rotto
 
-### 4.0 Lo strumento di misura era difettoso
+Nel progetto c'era già un programma che misurava quanto bene funziona la
+separazione. Aveva tre difetti, e **tutti e tre facevano sembrare il modello
+migliore di com'è**.
 
-`evaluate_disentanglement.py` aveva tre difetti, e **tutti e tre gonfiavano il disentanglement apparente**. La matematica di dCor era corretta — verificata su casi noti, restituisce esattamente 1 per input identici, riscalati e ruotati. Il problema stava attorno.
+Il più grave riguarda il controllo che prova a indovinare da quale negozio viene
+un dato. Lavorava su numeri molto piccoli e non riusciva a sfruttarli. Sistemata
+la scala, la sua capacità di indovinare passa da 82% a **99%**. Diciassette punti
+di differenza, in silenzio, sempre a favore del modello.
 
-1. **Probe su feature non standardizzate.** I valori stanno intorno a 0.02, quindi la penalità L2 di default dominava e i classificatori andavano in underfitting. Nessun warning. Su Elec→Cloth il probe lineare legge 98.82% con lo scaler e 81.79% senza: **diciassette punti di sottostima**.
-2. **dCor confrontato con uno zero irraggiungibile.** È la forma V-statistic, distorta verso l'alto a N finito e alta dimensione: due gaussiane *indipendenti* con N=5000 e D=256 danno 0.41. Ora lo script permuta le righe di uno spazio, ottiene il null empirico e riporta lo scarto.
-3. **19 GB di memoria** per la matrice delle distanze a 35k utenti. Ora campiona: a 5.000 la stima cambia di un centesimo.
+**Questo è già un risultato.** Con il difetto, la separazione sembrava mediocre
+ma esistente. Senza il difetto, risulta praticamente nulla. Chiunque usi questo
+tipo di misura senza attenzione rischia lo stesso errore.
 
-**Questo è già un risultato.** Con il difetto 1, Elec→Cloth sembrava avere un disentanglement score del 18%. Il valore vero è 1.18%. Un probe sotto-specificato sovrastima il disentanglement in modo silenzioso, e la trappola vale per chiunque riporti queste metriche.
+---
 
-### 4.1 L'ortogonalità non compra indipendenza
+## 5. Cosa abbiamo trovato
 
-È il risultato principale, e lo sweep controllato lo chiude.
+### 5.1 Le due parti sono perpendicolari, ma dicono la stessa cosa
 
-Il modello è addestrato a rendere i due canali **perpendicolari** — il coseno misura quello. Ma l'obiettivo è che il canale *shared* abbia dimenticato da quale dominio viene, e quello si misura altrimenti: con la distance correlation, e chiedendo a un classificatore di indovinare il dominio guardando solo quel canale.
+Il modello viene addestrato a rendere le due parti **perpendicolari**.
+Perpendicolare vuol dire "che non si sovrappongono".
 
-Sweep su Cloth→Elec, **una sola variabile che cambia**, tutto il resto fisso:
+Ma perpendicolare **non vuol dire indipendente**.
 
-| `cl_org_weight` | 0.01 | 1 | 10 |
+> **L'esempio che chiarisce tutto.** Prendi dei punti disposti su un cerchio. Le
+> due coordinate, orizzontale e verticale, sono perpendicolari: nessuna contiene
+> l'altra. Eppure se ti dico dov'è un punto in orizzontale, sai subito dov'è in
+> verticale, perché sta sul cerchio. Perpendicolari e completamente collegate.
+
+Il modello ottiene esattamente questo.
+
+**La prova.** Abbiamo aumentato **mille volte** la forza con cui il modello
+spinge per renderle perpendicolari:
+
+| forza applicata | ×1 | ×100 | ×1000 |
 |---|---|---|---|
-| **Coseno** (target) — *ideale 0* | 0.2164 | 0.0119 | **0.0068** |
-| dCor gap (target) — *ideale 0* | +0.7305 | +0.6726 | **+0.6479** |
-| dCor gap (source) — *ideale 0* | +0.8032 | +0.7631 | **+0.7566** |
-| Probe lineare e^c — *ideale 50%* | 99.19% | 98.76% | **99.12%** |
-| Probe MLP e^c — *ideale 50%* | 99.92% | 99.77% | **99.91%** |
-| Recall@20 | 0.0395 | 0.0397 | **0.0401** |
+| quanto sono perpendicolari (0 = perfetto) | 0.216 | 0.012 | **0.007** |
+| quanto sono davvero indipendenti (0 = perfetto) | 0.73 | 0.67 | **0.65** |
+| indovina il negozio (50% = ideale) | 99.9% | 99.8% | **99.9%** |
+| qualità dei consigli | 0.0395 | 0.0397 | **0.0401** |
 
-**Aumentando il peso di mille volte, i canali diventano trentadue volte più perpendicolari, il gap di dipendenza migliora dell'11%, e la fuga di informazione sul dominio resta esattamente dov'era: 99%.**
+Le parti diventano **32 volte più perpendicolari**. L'indipendenza vera migliora
+dell'11%. La capacità di indovinare il negozio non si muove.
 
-Il coseno crolla in modo monotono: la loss fa il mestiere per cui è scritta. I probe non si muovono affatto — 99.19 → 98.76 → 99.12 è rumore. Il gap di dCor migliora in modo monotono ma minuscolo.
+**Facendo il conto**, per arrivare all'indipendenza vera con questo metodo
+servirebbe una forza circa 10²³ volte più grande: un numero senza senso. Non è
+una leva poco efficace, è una leva inefficace in modo assoluto.
 
-**Il calcolo che chiude la questione.** Il gap scende in modo circa lineare nel logaritmo del peso: −0.029 per decade tra 0.01 e 1, −0.025 nell'ultima decade. A questo ritmo, per portarlo da 0.648 a zero servirebbero **oltre venti decadi**, cioè un `cl_org_weight` dell'ordine di 10²³. Non è che la leva sia inefficace: è inefficace di un fattore astronomico. Questo è più forte di "non migliora", perché è quantificato e non si può obiettare "avresti dovuto spingere di più".
+E non c'è nemmeno un prezzo da pagare: la qualità dei consigli resta identica.
+Vuol dire che **questa regola non c'entra con quello che fa funzionare il
+modello**.
 
-**Non c'è un trade-off da invocare.** Recall@20 va 0.0395 → 0.0397 → 0.0401: sale impercettibilmente. Anche con peso 10, quando il termine di ortogonalità domina la loss, l'accuratezza non se ne accorge. Il vincolo è semplicemente **disaccoppiato** da ciò che fa funzionare il modello.
+### 5.2 Sui prodotti la separazione non avviene proprio
 
-**Un effetto funzionale c'è, ma è un altro.** τ si allarga in modo monotono (deviazione 0.065 → 0.080 → 0.091) e le raccomandazioni native-driven triplicano (4.8% → 15.3%). L'ortogonalità sposta il baricentro verso il canale specific. Fa qualcosa, non quello che dovrebbe.
+Il modello divide in due parti sia gli utenti sia i prodotti. Abbiamo guardato i
+prodotti, cosa che nessuno aveva fatto: il programma di misura esistente
+controllava **solo gli utenti**.
 
-**L'analogia.** Prendi dei punti su una circonferenza. Le coordinate x e y hanno correlazione zero: sono "perpendicolari" in senso statistico. Eppure conoscendo x sai quanto vale y, a meno del segno. Sono scorrelate ma dipendenti. Il modello azzera il prodotto scalare e ottiene precisamente quello.
+Per creare le due parti il modello usa due "filtri". Sui prodotti i due filtri
+hanno imparato **la stessa identica cosa**: si sovrappongono al 98%.
 
-**Contraddice una scelta di design dichiarata.** Il paper scrive di aver provato la cosine similarity, di aver ottenuto risultati peggiori, e di aver scelto l'ortogonalità perché *"provides a clearer separation between subspaces, resulting in more robust representation disentanglement"*. La separazione è chiara nello spazio, non nell'informazione.
+Di conseguenza le due parti organizzano i prodotti allo stesso modo — quali
+prodotti considerano simili tra loro coincide al **99,84%**. Sono la stessa cosa
+scritta due volte.
 
-### 4.2 L'attention è quasi inerte, e la Figura 3 non è riproducibile
+E il dato più netto: su questa misura il modello **buono** è indistinguibile da
+un modello che sappiamo essere completamente rotto (99,84% contro 99,97%).
 
-Il paper dedica una figura alla distribuzione dell'attention tra i due canali, e ci costruisce sopra due affermazioni interpretative: domini poco correlati peserebbero di più le shared, domini di contenuto (Movie) le specific.
+### 5.3 L'informazione sul negozio non si riesce a togliere
 
-Eq. (4) del paper è esattamente ciò che il codice implementa e ciò che abbiamo misurato:
+Abbiamo provato a rimuovere l'informazione "da quale negozio viene questo dato",
+una direzione alla volta.
 
-```
-[a_c, a_s] = softmax( e_g · [e_c, e_s] / √d )
-```
-
-| Elec&Cloth | Figura 3 | nostra misura |
+| direzioni rimosse | indovino con un metodo semplice | indovino con un metodo furbo |
 |---|---|---|
-| shared | 80.55% / 80.78% | **50.10% / 49.52%** |
-| specific | 19.45% / 19.22% | 49.90% / 50.48% |
+| 0 | 98.8% | 99.6% |
+| 5 | **54.6%** | 98.2% |
+| 20 | **50.1%** | 98.3% |
+| 40 | 48.5% | 96.7% |
 
-Per produrre 80.55/19.45 servirebbe un gap di logit pari a **22.74**. Nel nostro modello è **+0.06** sul source e **−0.31** sul target, con deviazione ~0.7–0.9.
+Con **cinque** direzioni rimosse il metodo semplice non ci riesce più: 50%
+significa tirare a indovinare. Ma un metodo un po' più furbo continua a
+indovinare al 98%, anche dopo quaranta.
 
-Abbiamo escluso che la figura riporti una quantità diversa: né i pesi di attention (50.10%), né la proporzione delle norme dopo l'attention (49.52%), né quella prima (49.43%) si avvicinano a 80/20.
+**Questa è la spiegazione di tutto il resto.** I rimedi che il modello usa, e
+anche quelli che abbiamo provato noi, sono tutti metodi "semplici" di questo
+tipo. L'informazione che dovrebbero rimuovere non è raggiungibile così.
 
-Il motivo dell'inerzia è architetturale: i logit vengono divisi per √d, e con d = 256 la scala è **16**. Differenze già piccole vengono schiacciate, e il softmax restituisce quasi sempre mezzo e mezzo.
+C'è anche un avvertimento serio: **chi misura con il metodo semplice, dopo un
+intervento del genere, legge 50% e dichiara di aver risolto.** Mentre
+l'informazione è ancora tutta lì.
 
-**Conseguenza per l'interpretazione di τ.** Scomponendo la varianza dei log-odds di τ, l'attention spiega l'**1.3%** e la geometria degli item il **92.5%**. Forzando l'attention a 0.5/0.5 esatti, τ passa da 0.4159 a 0.4212 con deviazione quasi invariata. Quindi **τ varia perché i prodotti si allineano diversamente con i due sottospazi, non perché il modello decida diversamente da utente a utente.**
+### 5.4 Il meccanismo che dovrebbe pesare le due parti non decide niente
 
-**Limite.** Abbiamo misurato solo la coppia Elec/Cloth. La Figura 3 ha sei barre su tre coppie, e la più estrema è Douban Movie a 28.04/71.96. Per ora si può dire "per Elec/Cloth non è riproducibile", non "la Figura 3 è sbagliata". Il test decisivo è allenare Douban Movie↔Book.
+Il modello ha un pezzo che, per ogni utente, dovrebbe decidere quanto peso dare
+alla parte condivisa e quanto a quella specifica. L'articolo gli dedica un
+grafico e ci costruisce sopra due conclusioni.
 
-### 4.3 τ come strumento diagnostico
+Il grafico dell'articolo dice, per Elettronica: **80% alla parte condivisa, 20%
+a quella specifica**.
 
-Sul dataset piccolo τ era una costante: 0.4972 con deviazione **0.006**, uguale per ogni utente e ogni prodotto. Sembrava un bug. Non lo era: lì i due canali erano **lo stesso vettore** (coseno 0.997), quindi contribuivano per forza allo stesso modo.
+Noi misuriamo, sullo stesso modello che riproduce i loro risultati: **50% e
+50%**.
 
-Il meccanismo del collasso: entrambi i canali si ottengono filtrando lo stesso vettore con due "rubinetti" appresi, e i rubinetti avevano imparato valori quasi identici, 0.408 contro 0.409. Da lì degenera tutto, compresa l'attention, a 0.4999 contro 0.5001.
+Abbiamo controllato di non stare misurando una cosa diversa: né i pesi, né altre
+due grandezze plausibili si avvicinano a 80/20.
 
-| | CDs→Instr. | Elec→Cloth | Cloth→Elec (org 1) |
-|---|---|---|---|
-| τ pooled | 0.4967 | 0.4245 | 0.5031 |
-| deviazione | **0.006** | 0.084 | 0.080 |
-| τ per utente (min–max) | ~0.50 piatto | 0.242 – 0.741 | 0.310 – 0.733 |
+Il motivo è che quel pezzo riceve differenze già piccole e le schiaccia
+ulteriormente, quindi il risultato è quasi sempre "metà e metà". Di fatto **non
+sceglie niente**: spiega solo l'1,3% della variazione di τ, mentre il 92,5%
+dipende da quale prodotto si sta considerando.
 
-**Due situazioni opposte dietro lo stesso numero.** τ vale ~0.50 sia su CDs→Instruments sia su Cloth→Elec. Nel primo caso è collasso (deviazione 0.006, tutti identici); nel secondo una distribuzione vera centrata a metà. **Chi guarda solo la media conclude il contrario del vero: il segnale è la dispersione.**
+### 5.5 τ serve, ma per una cosa diversa da quella prevista
 
-È il contributo che τ ha effettivamente dato: una spia di collasso leggibile a colpo d'occhio, definita sulla singola raccomandazione invece che sull'intero spazio latente.
+Su un modello rotto τ vale 0.497 e **non cambia mai**: sempre lo stesso valore
+per ogni utente e ogni prodotto. Non è un difetto del nostro strumento: lì le due
+parti sono lo stesso dato, quindi pesano per forza uguale.
 
-### 4.4 Il risultato sul transfer agli utenti abituali: **ritirato**
+Su un modello sano τ varia davvero, da 0.24 a 0.74 a seconda dell'utente.
 
-Nelle prime due misure sembrava emergere che più un utente ha storia nel dominio target, più la raccomandazione dipende dal transfer — il contrario dell'assunzione comune sul cross-domain. Con quattro misure il quadro si scioglie:
+| | modello rotto | modello sano |
+|---|---|---|
+| τ medio | 0.497 | 0.503 |
+| **quanto τ varia** | **0.006** | **0.080** |
 
-| run | τ (storia 5–19) | τ (storia 20+) | differenza |
-|---|---|---|---|
-| Elec→Cloth, org 0.1 | 0.4145 | 0.4813 | **+0.067** |
-| Cloth→Elec, org 1 | 0.5010 | 0.5231 | **+0.022** |
-| Cloth→Elec, org 0.01 | 0.5000 | 0.4866 | **−0.013** |
-| Cloth→Elec, org 10 | 0.4758 | 0.4592 | **−0.017** |
+**Il tranello:** il valore medio è quasi identico nei due casi. Chi guarda solo
+la media conclude il contrario del vero. **Il segnale è quanto τ varia**, non
+quanto vale in media.
 
-L'effetto **cambia segno** al variare di un solo peso di loss, sullo stesso dataset, nella stessa direzione, con gli stessi utenti. Anche la correlazione crolla da +0.41 a +0.11 tra le due direzioni.
-
-Non è un effetto debole: è un artefatto degli iperparametri. Va ritirato, non ridimensionato. Resta utile come informazione negativa — dice che τ, aggregata per fasce di utenti, **non è una quantità stabile** nel modello attuale, il che è coerente con un canale "shared" che non rappresenta stabilmente ciò che il suo nome promette.
+È questo che τ ha dato di utile: **una spia che dice a colpo d'occhio se la
+separazione è collassata**, verificabile su una singola raccomandazione.
 
 ---
 
-## 5. Conclusioni sul Contributo 1
+## 6. Una cosa che avevamo trovato e che abbiamo ritirato
 
-**L'attribuzione funziona come strumento.** È esatta per costruzione, si autoverifica a ogni esecuzione, si rifiuta di produrre spiegazioni quando non può garantirle, e regge su cinque checkpoint e quattro configurazioni. Come contributo tecnico è solido e difendibile.
+All'inizio sembrava emergere un risultato interessante: più un utente ha acquisti
+nel negozio in cui riceve i consigli, più il consiglio dipende dall'altro
+negozio. Sarebbe stato il contrario di quello che si dà per scontato.
 
-**Ma la sua resa scientifica diretta è diagnostica, non esplicativa.** Vale la pena essere onesti su cosa τ ha e non ha prodotto:
+Con quattro misure invece che due, l'effetto **cambia segno**:
 
-| cosa speravamo | cosa è successo |
+| modello | effetto |
 |---|---|
-| τ rivela chi beneficia del transfer | ritirato, artefatto degli iperparametri (§4.4) |
-| τ come misura di influenza cross-domain | l'etichetta "shared" non regge: canale al 99% riconoscibile per dominio |
-| τ come spia di collasso | ✅ funziona, ed è il contributo che resta |
-| l'attention rivela le preferenze di fusione | l'attention spiega l'1.3% di τ, è quasi inerte |
+| primo | +0.067 |
+| secondo | +0.022 |
+| terzo | −0.013 |
+| quarto | −0.017 |
 
-**I risultati che sopravvivono non vengono da τ.** Vengono dall'infrastruttura di misura costruita attorno — probe corretti, gap di dCor, sweep controllato — e dal confronto con quanto il paper dichiara. Il Contributo 1 è servito soprattutto a rendere possibili quelle misure, e a fornire una diagnosi (§4.3) che le metriche esistenti non danno.
-
-**La spina dorsale del lavoro si è spostata.** Non è più "spieghiamo le raccomandazioni cross-domain", ma:
-
-> **I meccanismi di DGCDR non fanno quello che il paper dichiara facciano**, dimostrato con tre reperti indipendenti su un modello che riproduce i risultati pubblicati entro il 3%:
-> 1. l'ortogonalità non compra indipendenza, e non lo farebbe nemmeno con pesi 10²³ volte maggiori;
-> 2. l'attention è quasi inerte, e la figura che la descrive non è riproducibile;
-> 3. il canale "domain-shared" resta riconoscibile per dominio al 99%.
-
-È un paper critico verso un lavoro esistente. È una scelta che va fatta consapevolmente, ma i tre reperti sono più solidi di qualunque risultato positivo che avessimo in mano all'inizio — e la pipeline di attribuzione resta il contributo metodologico che li rende misurabili.
+Cambia segno modificando **una sola impostazione**, sugli stessi dati e sugli
+stessi utenti. Non è un effetto debole: è un effetto che non c'è. Ritirato.
 
 ---
 
-## 6. Limiti
+## 7. Cosa non abbiamo dimostrato
 
-- **Un seed per configurazione.** Niente è stato replicato con seed diversi.
-- I confronti tra le due *direzioni* cambiano più variabili insieme. Lo sweep interno a Cloth→Elec invece è a variabile singola ed è quello su cui poggia §4.1.
-- I dataset sono 10-core: **nessun utente davvero freddo**.
-- τ descrive **come è composto** il punteggio, non cosa succederebbe togliendo un canale e ricalcolando la classifica.
-- τ alto **non** significa raccomandazione migliore. È un'attribuzione, non una valutazione.
-- La scomposizione esatta richiede `fuse_mode='attention'`, e solo gli utenti sovrapposti hanno un τ definito.
-- I probe sono **a soffitto** (98–100%): lì non distinguono più configurazioni diverse, e il confronto va appoggiato sul gap di dCor.
-- Il gap di dCor dipende dal numero di utenti campionati: confrontabile solo a `--dcor_sample` uguale. CDs→Instruments (1.842 utenti sovrapposti) resta fuori confronto.
-- **Bug noto in `dgcdr.py`**, rilevante per il Contributo 2: il caricamento degli embedding testuali usa l'ID fuso per indicizzare l'array del dominio source, che è compattato. Su CDs/Instruments questo mappa correttamente solo i 3.609 item del target, ne mappa 23 **sul prodotto sbagliato**, e lascia a zero tutti i 3.609 del source — con la semantic loss che li tira comunque verso una costante. Nessuno dei run qui usava `use_text_embeddings=True`.
-- **Previsione sbagliata**, annotata: mi aspettavo τ più basso su Cloth→Elec. È uscito più alto (0.503 contro 0.425).
-- **Affermazione ritirata**: avevo scritto che ogni misura di indipendenza peggiora aumentando `cl_org_weight`, basandomi sul confronto confondato tra direzioni. Nello sweep pulito il gap di dCor migliora leggermente e i probe restano fermi.
+- Ogni modello è stato allenato **una volta sola**. Non abbiamo ripetuto le prove
+  per verificare la stabilità dei numeri.
+- I dati non contengono utenti davvero nuovi (tutti hanno già qualche acquisto),
+  quindi non possiamo dire nulla sui clienti appena arrivati.
+- τ dice **come è composto** un punteggio, non cosa succederebbe togliendo una
+  delle due parti. Sono due domande diverse.
+- Un τ alto **non** significa consiglio migliore. È una descrizione, non un
+  giudizio.
+- Sul meccanismo dei pesi (§5.4) abbiamo misurato una coppia di negozi su tre.
+  Per ora si può dire "su questa coppia non torna", non "il grafico è sbagliato".
+- Una previsione che avevo fatto era sbagliata: pensavo che l'informazione sul
+  negozio stesse nelle direzioni principali dei dati e che togliendo quelle
+  sparisse. Rimosse le prime cinquanta, si indovina ancora al 98,6%.
 
 ---
 
-## 7. Prossimi passi
+## 8. Cosa resta da fare
 
-**1. Douban Movie↔Book.** Il run con il miglior rapporto valore/costo: testa il punto più estremo della Figura 3 (28.04/71.96) e aggiunge una terza coppia di domini a tutto il resto. Se anche lì l'attention esce ~50/50, §4.2 è chiuso su tutte e tre le coppie del paper.
+**1. Provare una terza coppia di negozi** (Film e Libri). È la prova più
+conveniente: verifica il punto §5.4 sul caso più estremo dell'articolo e aggiunge
+dati nuovi a tutto il resto.
 
-**2. Loss domain-adversariale** (branch `domain-adversarial`, già implementata). È l'unico intervento che attacca il probe al 99%, l'unica misura che lo sweep ha lasciato immobile. Da valutare sul gap di dCor e su Recall, non sul probe — che stiamo ottimizzando.
+**2. Ripetere gli allenamenti** cambiando solo il punto di partenza casuale, per
+sapere quanto sono stabili i numeri.
 
-**3. Replica con più seed**, per stabilire quanto sono stabili τ e le misure di disentanglement.
+**3. Togliere una delle due parti** e rifare le classifiche, per capire se serve
+davvero.
 
-**4. Controfattuale**: azzerare il canale shared, ricalcolare le classifiche, passare dall'attribuzione alla causalità.
+**4. Il Contributo 2**, descritto nel piano a parte.
 
-**5. Contributo 2 (concept naming).** Richiede prima la correzione del bug sulla mappatura degli ID nei text embedding.
+---
+
+## 9. Il senso complessivo
+
+All'inizio l'obiettivo era **spiegare** le raccomandazioni. Strada facendo il
+lavoro è diventato un altro, più solido:
+
+> **I meccanismi di DGCDR non fanno quello che l'articolo dice che facciano**, e
+> lo dimostriamo su un modello che riproduce i loro risultati pubblicati con uno
+> scarto dell'1-3%.
+
+Tre prove indipendenti:
+
+1. la regola che dovrebbe separare le due parti non le separa, e non lo farebbe
+   nemmeno con una forza inimmaginabilmente più grande;
+2. sui prodotti la separazione non avviene affatto, e non se n'era accorto
+   nessuno perché nessuno guardava lì;
+3. il meccanismo che dovrebbe pesare le due parti è fermo a metà e metà.
+
+Lo strumento che abbiamo costruito resta ciò che rende possibili tutte queste
+misure. Ma è giusto dire chiaramente che il risultato principale non è lui: sono
+le cose che ha permesso di vedere.
