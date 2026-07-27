@@ -6,12 +6,14 @@ La prima versione di questo piano è stata in gran parte falsificata dai suoi
 stessi cancelli. Quella che segue è la versione che resta in piedi, con i
 risultati di quanto è già stato eseguito.
 
-> **Stato: passi 1-4 eseguiti.** I numeri sono in `RISULTATI.md` §6. In breve:
-> le etichette superano il test di validità su tutti e quattro i casi, e il
-> canale shared produce una corrispondenza cross-domain riconoscibile
-> (47.6% contro un caso del 25%, p = 0.021) mentre l'embedding grezzo resta al
-> caso (32.0%, p = 0.27). Il confronto **diretto** fra i due canali non è però
-> significativo (Fisher p = 0.37): resta da chiudere.
+> **Stato: passi 1-4 eseguiti, su quattro clusterizzazioni.** I numeri sono in
+> `RISULTATI.md` §6. In breve: le etichette superano il test di validità, e il
+> canale shared produce una corrispondenza cross-domain riconoscibile — 34.8%
+> contro un caso del 25%, p = 0.013 su 112 coppie — mentre l'embedding grezzo
+> resta al caso (26.7%, p = 0.35).
+>
+> **Il confronto diretto fra i due canali resta aperto** (Fisher p = 0.17), e
+> non si chiude aggiungendo cluster: vedi §8.
 
 ---
 
@@ -197,7 +199,7 @@ Erano stati scritti prima di eseguire. Come sono andati:
 | previsto | esito |
 |---|---|
 | Le etichette non superano il Passo 3 | **non successo** — validità significativa in tutti e quattro i casi |
-| I concetti shared si accoppiano come quelli base | **non successo** — shared batte il caso, base no. Era il risultato che mi aspettavo, ed era sbagliato |
+| I concetti shared si accoppiano come quelli base | **parzialmente** — shared batte il caso e base no, ma la differenza fra i due non e' dimostrata |
 | Nessuno dei due si accoppia sopra il caso | **non successo** per shared, **successo** per base |
 | Circolarità fra chi nomina e chi giudica | evitata: `qwen3.5:9b` nomina, `gemma4` giudica, entrambi ciechi |
 | Contaminazione da popolarità | **escluso** — il cluster target più attrattivo era il più piccolo (1.297 item), non il più grande |
@@ -208,24 +210,48 @@ addestrati. Dava validità **sotto il caso** (16.7% contro 25%), che è il segna
 tipico di un errore a monte. Corretto, sale a 58.3%. Il racconto completo è in
 `RISULTATI.md` §6.4.
 
-## 8. Cosa resta da fare
+## 8. Il confronto shared contro base, e perché non si chiude così
 
-**Chiudere il confronto shared contro base.** Oggi sappiamo che shared batte il
-caso e base no, ma non che shared sia meglio di base: servirebbero circa 39 punti
-di differenza per concludere a questi numeri, e ne abbiamo 15. Più cluster, più
-seed, o un secondo checkpoint.
+Ci abbiamo provato con quattro clusterizzazioni, da 12 a 60 gruppi, due seed.
+Risultato: shared 34.8% su 112 coppie, base 26.7% su 150. Shared batte il caso
+(p = 0.013), base no (p = 0.35), la differenza fra i due no (p = 0.17).
 
-**Verificare la stabilità della corrispondenza semantica.** La degenerazione
-dell'imbuto è stata verificata su tre seed e due granularità. La corrispondenza
-semantica no: è stata misurata una volta sola.
+**Aggiungere cluster non funziona, e i dati lo mostrano.** Passando da 30 a 60
+gruppi crollano entrambi i canali — shared da 47.6% a ~31%, base da 32% a ~25%.
+Più cluster significa etichette più simili fra loro dentro lo stesso dominio, e
+il giudice le confonde. Le coppie in più si pagano in risoluzione.
 
-**Capire cosa sono le regioni senza tema.** Otto cluster source su trenta puntano
-su cluster target che l'LLM non ha saputo nominare. Sono il pezzo che non
-funziona, e nessuno ha ancora guardato cosa contengano.
+È una tensione strutturale del disegno: la potenza statistica richiede molte
+coppie, le coppie richiedono molti cluster, e molti cluster distruggono la
+distinguibilità che il test misura. Non è una questione di compute.
+
+Le due strade praticabili:
+
+**Altri checkpoint.** Repliche genuinamente indipendenti, invece di
+clusterizzazioni dello stesso modello. Il tentativo in locale è fallito per un
+motivo prosaico: i modelli allenati sulla VM riferiscono directory di dataset
+chiamate `Cloth_Elec_...` mentre in locale sono `AmazonCloth_AmazonElec_...`.
+Sulla VM si caricherebbero senza problemi.
+
+**Una misura graduata al posto della scelta forzata.** Oggi ogni chiamata
+restituisce un bit: giusto o sbagliato fra quattro alternative. Chiedendo invece
+un punteggio di somiglianza sulla coppia geometrica e su una casuale, e
+confrontando le distribuzioni con un test appaiato, si estrae molta più
+informazione dalla stessa spesa. È probabilmente la strada migliore.
+
+## 9. Le altre cose rimaste aperte
+
+**La stabilità della corrispondenza.** La degenerazione dell'imbuto è verificata
+su tre seed e due granularità. La corrispondenza semantica è stata misurata su
+un solo modello.
+
+**Le regioni senza tema.** Otto cluster source su trenta puntano su cluster
+target che l'LLM non ha saputo nominare. Sono il pezzo che non funziona, e
+nessuno ha ancora aperto quei gruppi per vedere cosa contengano.
 
 ---
 
-## 9. Il ruolo dell'LLM
+## 10. Il ruolo dell'LLM
 
 Il Contributo 1 spiega **quanto**: la quota del punteggio che viene da ciascun
 canale, in modo esatto e verificabile. Il Contributo 2 spiega **cosa**: di che

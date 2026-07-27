@@ -278,31 +278,53 @@ Tutte significative. Lo strumento misura qualcosa, quindi il resto è
 interpretabile. Era il cancello del piano: se le etichette fossero state
 plausibili ma vuote, ci saremmo fermati qui.
 
-### 6.2 Il canale shared porta una corrispondenza cross-domain reale
+### 6.2 Il canale shared porta una corrispondenza cross-domain, ma il confronto con base resta aperto
 
 Il test confronta **due accoppiamenti indipendenti**: quello che il modello ha
 codificato (per ogni cluster source, il cluster target col centroide più vicino)
 e quello che l'LLM legge dalle sole etichette, senza vedere la geometria.
 
-| canale | accordo | p contro il caso (25%) |
-|---|---|---|
-| **shared** | 10/21 = **47.6%** | **0.021** |
-| base | 8/25 = 32.0% | 0.27 |
+Quattro clusterizzazioni dello stesso checkpoint, granularità e seed diversi:
 
-Quando il modello avvicina un gruppo di prodotti elettronici a un gruppo di capi
-d'abbigliamento, quell'accostamento ha un senso leggibile quasi metà delle volte.
-Sull'embedding grezzo, senza disentanglement, la stessa procedura resta al caso.
+| run | shared | base | differenza |
+|---|---|---|---|
+| k=12 | 50.0% (2/4) | 36.4% | +14 |
+| k=30 | 47.6% (10/21) | 32.0% | +16 |
+| k=60, seed 42 | 30.2% (13/43) | 27.8% | +2 |
+| k=60, seed 7 | 31.8% (14/44) | 21.7% | +10 |
+| **aggregato** | **34.8%** (39/112) | **26.7%** (40/150) | **+8.2** |
 
-**È notevole perché nessuno l'ha chiesto al modello.** `cl_sim_weight` allinea i
-canali comuni **degli utenti**: non esiste alcun termine di allineamento
-cross-domain sugli item. La corrispondenza semantica fra gli item si è formata da
-sola, propagandosi attraverso lo spazio utente condiviso.
+Cosa si può dire:
 
-**Il limite, da dichiarare insieme al risultato.** Il confronto **diretto** fra i
-due canali non è significativo: Fisher dà **p = 0.37**. Con questi numeri
-servirebbero circa 39 punti di differenza per concludere, e ne abbiamo 15. Quindi
-si può dire che shared batte il caso e base no, **non** che shared sia meglio di
-base.
+- **il canale shared batte il caso**: 34.8% contro 25%, **p = 0.013** su 112
+  coppie e quattro clusterizzazioni. Quando il modello avvicina un gruppo di
+  prodotti elettronici a un gruppo di capi d'abbigliamento, quell'accostamento ha
+  un senso leggibile più spesso di quanto accadrebbe a caso;
+- **l'embedding grezzo no**: 26.7%, p = 0.35;
+- **che shared sia meglio di base non è dimostrato**: Fisher dà **p = 0.17**.
+
+**È comunque notevole che shared batta il caso**, perché nessuno l'ha chiesto al
+modello: `cl_sim_weight` allinea i canali comuni **degli utenti**, e non esiste
+alcun termine di allineamento cross-domain sugli item. La corrispondenza si è
+formata da sola, propagandosi attraverso lo spazio utente condiviso.
+
+**Una stima che si è ridimensionata.** Le prime misure davano 47.6%, ma su 21
+coppie. Aggiungendo clusterizzazioni il valore si assesta intorno al 35%, e la
+differenza stimata scende da 15.6 punti a 8.2. È il comportamento tipico di un
+effetto misurato su pochi campioni. Per rilevare 8 punti servirebbero circa
+**500 coppie per canale**, cinque volte quelle raccolte.
+
+**Perché non basta aggiungere cluster.** Passando da 30 a 60 gruppi **entrambi**
+i canali crollano: shared da 47.6% a ~31%, base da 32% a ~25%. Più cluster
+significa etichette più simili fra loro dentro lo stesso dominio, che il giudice
+confonde. Le coppie in più si pagano in risoluzione: è una tensione strutturale
+del disegno, non una questione di quanto compute si spende.
+
+Le due strade che resterebbero: **altri checkpoint** (repliche genuinamente
+indipendenti invece di clusterizzazioni dello stesso modello) oppure una
+**misura graduata** al posto della scelta forzata — chiedere al giudice un
+punteggio di somiglianza sulla coppia geometrica e su una casuale, e confrontare
+le distribuzioni. Stesso costo in chiamate, molta più informazione per chiamata.
 
 ### 6.3 Ma la corrispondenza è un imbuto
 
@@ -397,9 +419,16 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
   grezzo. È emerso il contrario. Vale la pena registrarlo perché era una
   previsione motivata — non esiste una loss di allineamento sugli item — e si è
   rivelata falsa.
-- L'audit semantico usa **un solo clustering per canale** (30 gruppi) e un solo
-  checkpoint. La degenerazione dell'imbuto è stabile su tre seed, la
-  corrispondenza semantica no: quella è stata misurata una volta sola.
+- L'audit semantico poggia su **quattro clusterizzazioni di un solo
+  checkpoint**. Repliche su modelli diversi non ci sono: il tentativo è fallito
+  perché i checkpoint allenati sulla VM riferiscono directory di dataset con
+  nomi diversi da quelli locali.
+- **Il test di corrispondenza si degrada al crescere dei cluster**, perché le
+  etichette diventano più simili fra loro e il giudice le confonde. Non è quindi
+  possibile comprare potenza statistica semplicemente alzando la granularità.
+- **Una stima ridimensionata**: la corrispondenza del canale shared era stata
+  riportata al 47.6% su 21 coppie; su 112 coppie scende al 34.8%. Le prime
+  misure erano ottimistiche.
 
 ---
 
@@ -414,10 +443,11 @@ tutto il resto.
 **3. Controfattuale**: azzerare il canale shared, ricalcolare le classifiche, e
 passare dall'attribuzione alla causalità.
 
-**4. Chiudere il confronto shared contro base** (§6.2). Oggi shared batte il caso
-e base no, ma il confronto diretto fra i due non è significativo (p = 0.37).
-Servono più cluster, più seed, o un secondo checkpoint: è la differenza fra "il
-disentanglement produce corrispondenza semantica" e "non lo abbiamo dimostrato".
+**4. Chiudere il confronto shared contro base** (§6.2). Aggiungere cluster non
+funziona: degrada la misura. Le due strade praticabili sono ripetere l'audit su
+**altri checkpoint** — da fare sulla VM, dove quei modelli si caricano — oppure
+sostituire la scelta forzata con una **misura graduata**, che estrae molta più
+informazione da ogni chiamata.
 
 ---
 
@@ -463,9 +493,10 @@ conoscenza trasferita, e la sezione 5 mostra che non è così.
 **Il Contributo 2 aggiunge il livello semantico** (§6). L'attribuzione dice
 quanto pesa un canale; l'audit dice di cosa parla. Ed è la parte che ha prodotto
 il primo risultato **positivo** sul modello: il canale shared porta una
-corrispondenza cross-domain che un LLM riconosce (47.6% contro un caso del 25%),
-mentre l'embedding grezzo resta al caso — pur non esistendo alcuna loss che
-allinei gli item fra i due domini.
+corrispondenza cross-domain che un LLM riconosce (34.8% contro un caso del 25%,
+p = 0.013), mentre l'embedding grezzo resta al caso — pur non esistendo alcuna
+loss che allinei gli item fra i due domini. Che shared sia meglio di base resta
+però non dimostrato (p = 0.17).
 
 **Il limite da dichiarare.** τ non ha ancora prodotto un risultato stabile sui
 pattern di transfer: l'unico candidato è stato ritirato (§7). Il suo valore
