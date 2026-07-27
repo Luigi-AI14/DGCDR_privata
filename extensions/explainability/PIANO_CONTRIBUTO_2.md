@@ -46,14 +46,25 @@ di chiamate LLM su un confronto inesistente.
 
 ## 3. Cosa faremo invece
 
-Resta in piedi una domanda diversa, non toccata dal problema qui sopra.
+Resta in piedi una domanda diversa, non toccata dal problema qui sopra — ed è
+quella che serve direttamente all'obiettivo del lavoro.
+
+Il Contributo 1 produce spiegazioni **numeriche**: dice *quanto* una
+raccomandazione dipende dal canale shared. Non dice *di cosa parla* quel canale.
+Per una spiegazione in linguaggio naturale serve il contenuto, non solo la quota.
 
 DGCDR ha una seconda regola oltre all'ortogonalità: `cl_sim_weight`, la loss che
 **allinea i canali shared dei due domini**. È l'unico meccanismo del modello che
-punta all'invarianza di dominio.
+punta all'invarianza di dominio, ed è quello che dovrebbe rendere sensata la
+frase "questo gusto vale in entrambi i domini".
 
 > **La domanda: quell'allineamento è semanticamente reale, o è una coincidenza
 > geometrica?**
+
+Da questa risposta dipende cosa possiamo onestamente dire all'utente. Se
+l'allineamento è reale, si può spiegare una raccomandazione nei termini del
+concetto condiviso. Se non lo è, quella frase è un'etichetta senza referente e
+la spiegazione va formulata diversamente.
 
 Se dal dominio source esce il concetto "rock anni '70", dal target dovrebbe
 uscire qualcosa come "chitarre elettriche e amplificatori valvolari". Se i
@@ -175,15 +186,22 @@ Vale la pena scriverlo prima, non dopo.
 
 ---
 
-## 8. Una nota onesta sul ruolo dell'LLM
+## 8. Il ruolo dell'LLM
 
-I risultati più forti raccolti finora — collasso dei gate item, struttura
-identica dei due canali, irremovibilità lineare dell'informazione di dominio —
-**non hanno richiesto alcun LLM**. Sono misure di algebra lineare, ciascuna con
-il proprio null.
+Il Contributo 1 spiega **quanto**: la quota del punteggio che viene da ciascun
+canale, in modo esatto e verificabile. Il Contributo 2 spiega **cosa**: di che
+gusti si tratta.
 
-Il Contributo 2 resta l'unico punto in cui un LLM fa qualcosa che nessuna misura
-numerica può fare: leggere il contenuto degli item e giudicare se due insiemi di
-concetti, estratti da domini diversi, parlino della stessa cosa. Vale la pena
-farlo, ma con l'aspettativa giusta: è una misura in più, non la spina dorsale del
-lavoro.
+Sono i due pezzi di una stessa spiegazione. "Il 60% di questa raccomandazione
+viene dal canale condiviso" è un'informazione monca finché non si sa cosa quel
+canale rappresenti. È qui che serve un LLM, e serve per una cosa che nessuna
+misura numerica può fare: leggere il contenuto degli item e giudicare se due
+insiemi di concetti, estratti da domini diversi, parlino della stessa cosa.
+
+Una precisazione, però, per non sopravvalutarlo. I reperti più forti raccolti
+finora — collasso dei gate item, struttura identica dei due canali,
+irremovibilità lineare dell'informazione di dominio — **non hanno richiesto alcun
+LLM**: sono misure di algebra lineare, ciascuna con il proprio null. L'LLM
+aggiunge il livello semantico alla spiegazione, non la sua verificabilità. Quella
+viene dal Contributo 1, ed è ciò che rende questo framework diverso dagli
+explainer generativi esistenti.

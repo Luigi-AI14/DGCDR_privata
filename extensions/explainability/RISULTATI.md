@@ -17,9 +17,16 @@ Per farlo divide le preferenze in due parti:
 - **specific** — la parte che vale solo nel dominio target.
 
 L'idea è che la parte shared sia quella che trasferisce conoscenza da un dominio
-all'altro. Tutto il valore del modello sta in questa separazione.
+all'altro.
 
-**La nostra domanda: la separazione funziona davvero?**
+**L'obiettivo del lavoro è spiegare le raccomandazioni cross-domain**: dire, per
+ogni item raccomandato, quanto dipende da conoscenza importata dall'altro dominio
+e quanto dalle preferenze native.
+
+Da qui discende tutto il resto. Una spiegazione del genere ha senso solo se i due
+canali rappresentano davvero ciò che il loro nome promette. Verificarlo non è una
+deviazione dall'obiettivo: **è il presupposto perché la spiegazione sia
+affidabile**, ed è ciò che ci ha portati alle verifiche della sezione 5.
 
 ---
 
@@ -94,7 +101,13 @@ queste metriche.
 
 ---
 
-## 5. I risultati
+## 5. Cosa il framework ha rivelato sul modello
+
+Questa sezione è la validazione del contributo. Ogni punto è una proprietà di
+DGCDR che le metriche esistenti non mostravano e che il framework di
+attribuzione ha reso visibile. Sono anche i motivi per cui una spiegazione
+ingenua, del tipo "questo item ti è stato consigliato per i tuoi gusti
+trasferiti", sarebbe fuorviante.
 
 ### 5.1 L'ortogonalità non compra indipendenza
 
@@ -303,22 +316,47 @@ passare dall'attribuzione alla causalità.
 
 ---
 
-## 9. Il senso complessivo
+## 9. Il contributo
 
-All'inizio l'obiettivo era spiegare le raccomandazioni cross-domain. Strada
-facendo il lavoro è diventato un altro, più solido:
+L'obiettivo è **spiegare le raccomandazioni cross-domain in modo verificabile**.
 
-> **I meccanismi di DGCDR non fanno quello che il paper dichiara facciano**, su
-> un modello che riproduce i risultati pubblicati entro il 3%.
+**Il contributo metodologico** è il framework di attribuzione. Tre proprietà lo
+distinguono dagli explainer esistenti:
 
-Tre reperti indipendenti:
+1. **è esatto per costruzione** — non stima e non approssima, rifà l'aritmetica
+   del modello;
+2. **si autoverifica a ogni esecuzione** — ricompone i canali e li confronta con
+   l'output vero, con errore relativo tra 1e-07 e 3e-07;
+3. **si rifiuta di produrre spiegazioni** quando non può garantirle, invece di
+   restituire un'approssimazione plausibile.
+
+Nessun explainer basato su LLM offre queste garanzie: genera testo coerente con
+la cronologia dell'utente, senza alcun legame dimostrabile con il calcolo del
+modello.
+
+**Da qui nasce τ**, il transfer ratio: una misura per singola raccomandazione,
+non per l'intero spazio latente come le metriche di disentanglement esistenti.
+
+**La validazione è la sezione 5.** La domanda che un lettore pone a un explainer
+è "a cosa serve". La risposta è che, applicato a un modello che riproduce i
+risultati pubblicati entro il 3%, ha reso visibili tre proprietà che nessuna
+metrica esistente mostrava:
 
 1. l'ortogonalità non compra indipendenza, e non lo farebbe nemmeno con pesi
    10²³ volte maggiori;
-2. sul lato item il disentanglement non avviene affatto, e non se n'era accorto
-   nessuno perché la valutazione guardava solo gli utenti;
-3. l'attention è quasi inerte, e la figura che la descrive non è riproducibile.
+2. sul lato item il disentanglement non avviene affatto — invisibile alla
+   valutazione esistente, che misura solo i canali utente;
+3. l'attention è quasi inerte, e la figura del paper che la descrive non è
+   riproducibile.
 
-La pipeline di attribuzione resta il contributo metodologico che rende misurabili
-queste cose. Ma il risultato principale non è lei: sono le cose che ha permesso
-di vedere.
+Queste scoperte non sono un lavoro parallelo: sono **il motivo per cui serve uno
+strumento del genere**. Sono anche il motivo per cui una spiegazione ingenua
+sarebbe fuorviante — dire a un utente "ti consigliamo questo per i gusti
+trasferiti dall'altro dominio" presuppone che quel canale contenga davvero
+conoscenza trasferita, e la sezione 5 mostra che non è così.
+
+**Il limite da dichiarare.** τ non ha ancora prodotto un risultato scientifico
+stabile sui pattern di transfer: l'unico candidato è stato ritirato (sezione 6).
+Al momento il suo valore dimostrato è diagnostico — riconoscere il collasso della
+separazione — e come base per il Contributo 2, che aggiunge il livello semantico
+alle spiegazioni numeriche.
