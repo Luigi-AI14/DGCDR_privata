@@ -151,18 +151,32 @@ def _attention_channels(model, base, common, specific):
 
 
 def decompose_target_domain(model):
-    """Decompose the target-domain embeddings into additive channels.
+    """Decompose the target-domain embeddings. See :func:`decompose_domain`."""
+    return decompose_domain(model, 'target')
 
-    The target domain is the one recommendations are served from
-    (``full_sort_predict``), so it is the one that has to be explained.
+
+def decompose_domain(model, domain='target'):
+    """Decompose one domain's embeddings into additive channels.
+
+    The target domain is the one recommendations are served from, so it is the
+    one Contribution 1 explains. The source domain is needed by the semantic
+    audit, which compares the two.
+
+    Which domain is used is not a detail: each domain's embedding table only
+    covers its own items, and the rows for the other domain's items are left
+    untrained. Reading source items out of the target decomposition returns
+    vectors ~27x smaller than the real ones -- noise that clusters into equal
+    sized groups and looks like structure.
 
     Returns:
         ChannelDecomposition
     """
+    if domain not in ('source', 'target'):
+        raise ValueError(f"domain must be 'source' or 'target', got '{domain}'")
     _check_supported(model)
 
     with torch.no_grad():
-        target_user_e, target_item_e = _propagate(model, 'target')
+        target_user_e, target_item_e = _propagate(model, domain)
 
         n_overlap = model.overlapped_num_users
 
@@ -170,7 +184,7 @@ def decompose_target_domain(model):
         # Only overlapping users go through the disentanglement; the rest keep
         # their plain LightGCN embedding (see DGCDR.disentangle_layer).
         target_overlap = target_user_e[:n_overlap]
-        tg_common, tg_specific = _encode(model, target_overlap, 'target', is_user=True)
+        tg_common, tg_specific = _encode(model, target_overlap, domain, is_user=True)
         e_c, e_s, user_att = _attention_channels(model, target_overlap, tg_common, tg_specific)
 
         user_shared = torch.zeros_like(target_user_e)
@@ -191,14 +205,14 @@ def decompose_target_domain(model):
 
         # ---- items -----------------------------------------------------
         if model.item_disentangle:
-            it_common, it_specific = _encode(model, target_item_e, 'target', is_user=False)
+            it_common, it_specific = _encode(model, target_item_e, domain, is_user=False)
             i_c, i_s, _ = _attention_channels(model, target_item_e, it_common, it_specific)
 
             item_base = torch.zeros_like(target_item_e) if model.attention_mode == 'part' \
                 else target_item_e.clone()
             item_channels = {BASE: item_base, SHARED: i_c, SPECIFIC: i_s}
         elif model.item_mapping:
-            mapped = target_item_e * torch.sigmoid(model.target_item_mapping_layer(target_item_e))
+            mapped = target_item_e * torch.sigmoid(getattr(model, f'{domain}_item_mapping_layer')(target_item_e))
             item_channels = {BASE: mapped}
         else:
             item_channels = {BASE: target_item_e}
@@ -207,7 +221,7 @@ def decompose_target_domain(model):
                                device=target_user_e.device)
     overlap_mask[:n_overlap] = True
 
-    decomposition = ChannelDecomposition(user_channels, item_channels, overlap_mask, 'target')
+    decomposition = ChannelDecomposition(user_channels, item_channels, overlap_mask, domain)
     decomposition.user_attention = user_att
     return decomposition
 
@@ -224,7 +238,11 @@ def verify_decomposition(model, decomposition, atol=1e-4):
         item embeddings and recommendation scores, plus a boolean ``passed``.
     """
     with torch.no_grad():
-        _, _, _, _, target_user_e, target_item_e = model.forward()
+        _, _, src_user_e, src_item_e, tgt_user_e, tgt_item_e = model.forward()
+        if getattr(decomposition, 'domain', 'target') == 'source':
+            target_user_e, target_item_e = src_user_e, src_item_e
+        else:
+            target_user_e, target_item_e = tgt_user_e, tgt_item_e
 
         user_err = (decomposition.fused_user_embeddings() - target_user_e).abs().max().item()
         item_err = (decomposition.fused_item_embeddings() - target_item_e).abs().max().item()

@@ -28,6 +28,7 @@ import torch
 from recbole_cdr.quick_start.quick_start import load_data_and_model
 
 from extensions.explainability.channels import (
+    decompose_domain,
     decompose_target_domain,
     verify_decomposition,
 )
@@ -103,13 +104,20 @@ def main():
     print(f"  catalogue: {len(catalogue.records)} items")
 
     # --- extract, per domain ---
+    # Each domain must be decomposed from its own propagation: the other
+    # domain's items are untrained there, and clustering them yields noise.
     concepts = {}
     for domain in ('source', 'target'):
-        found = extract_concepts(model, decomposition, args.channel, domain,
+        domain_decomposition = (decomposition if domain == 'target'
+                                else decompose_domain(model, 'source'))
+        found = extract_concepts(model, domain_decomposition, args.channel, domain,
                                  n_clusters=args.n_clusters)
         concepts[domain] = found
         sizes = [c.size for c in found]
-        print(f"  {domain}: {len(found)} clusters, sizes {min(sizes)}-{max(sizes)}")
+        norms = domain_decomposition.item_channels[args.channel][
+            torch.as_tensor([c.members[0] for c in found])].norm(dim=1).mean()
+        print(f"  {domain}: {len(found)} clusters, sizes {min(sizes)}-{max(sizes)}, "
+              f"norma media {norms:.4f}")
 
     # --- phase A: naming ---
     print(f"\nNaming with {args.namer} (thinking off)...")
