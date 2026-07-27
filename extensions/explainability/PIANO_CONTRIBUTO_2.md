@@ -150,7 +150,7 @@ rappresenta davvero questo modello".
 | Metadati Elec + Cloth | ✅ in cache, 135.217 item, risoluzione 100% |
 | Risoluzione ID → token | ✅ verificata |
 | Estrazione dei cluster | ✅ `concepts.py` |
-| Endpoint LLM | ⚠️ **manca solo questo** |
+| Endpoint LLM | ✅ Ollama in locale, `qwen3.5:9b` + `gemma4` |
 
 Il vincolo dei metadati, che nella prima versione bloccava tutto, è risolto: il
 caricamento filtrato in streaming impiega 38 secondi sui 23 GB di dump.
@@ -162,17 +162,31 @@ corretta.
 
 ---
 
-## 6. Cosa resta da implementare
+## 6. Il codice
 
-**`concept_naming.py`** — etichettatura cieca, con i vincoli del Passo 2.
+Tutto implementato.
 
-**`concept_eval.py`** — `label_validity` (Passo 3) e `cross_domain_matching`
-(Passo 4), ciascuna con il proprio null.
+| file | cosa fa |
+|---|---|
+| `concepts.py` | cluster, centroidi, accoppiamento geometrico, correlazione fra strutture |
+| `concept_naming.py` | etichettatura cieca, coi vincoli del Passo 2 |
+| `concept_eval.py` | validità delle etichette (Passo 3) e corrispondenza (Passo 4), ognuna col proprio null |
+| `llm.py` | client Ollama, con il thinking mode controllabile per fase |
+| `../../audit_concepts.py` | lo script da lanciare |
 
-**`audit_concepts.py`** — CLI sul modello di `explain_dgcdr.py`. Deve rifiutarsi
-di girare su canali collassati, e il controllo va fatto **per canale**: sugli
-item di questo checkpoint la correlazione tra strutture è 0.9984, quindi lo
-script deve dirlo invece di procedere in silenzio.
+```bash
+python audit_concepts.py -m saved/<checkpoint>.pth --n_clusters 30
+```
+
+Gira su entrambi i canali, `shared` e `base`, così il controllo è integrato
+invece di richiedere un secondo lancio. Il thinking mode è spento nel naming —
+serve un'etichetta di sei parole — e acceso nel giudizio, che è il compito
+difficile.
+
+Lo script segnala quando i due canali item hanno la stessa struttura (0.9984 su
+questo checkpoint) invece di procedere in silenzio, e stampa la norma media dei
+canali: se ricompare un valore intorno a 0.02, si sta guardando roba non
+addestrata.
 
 ---
 
