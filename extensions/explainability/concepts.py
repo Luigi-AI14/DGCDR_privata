@@ -183,6 +183,28 @@ def principal_directions(model, decomposition, channel, domain, n_directions=12,
     return directions
 
 
+def concept_centroids(decomposition, concepts, channel):
+    """Unit-norm centroid of each cluster, in its own channel's space.
+
+    Needed to ask which target cluster a source cluster sits closest to, i.e.
+    what correspondence the model itself encodes.
+    """
+    centroids = []
+    for concept in concepts:
+        members = torch.as_tensor(concept.members, dtype=torch.long)
+        X = F.normalize(decomposition.item_channels[channel][members].cpu(), dim=1)
+        centroids.append(F.normalize(X.mean(dim=0), dim=0))
+    return torch.stack(centroids) if centroids else torch.empty(0)
+
+
+def geometric_pairing(source_centroids, target_centroids):
+    """For each source cluster, the index of the closest target cluster."""
+    if source_centroids.numel() == 0 or target_centroids.numel() == 0:
+        return []
+    similarity = source_centroids @ target_centroids.t()
+    return similarity.argmax(dim=1).tolist()
+
+
 def structure_correlation(model, decomposition, channel_a, channel_b, domain,
                           n_sample=2000, seed=0):
     """Do two channels organise the items in the same way?
