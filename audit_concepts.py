@@ -53,7 +53,7 @@ def audit_channel(model, decompositions, channel, catalogue, namer, judge, args)
     concepts, centroids = {}, {}
     for domain in ('source', 'target'):
         found = extract_concepts(model, decompositions[domain], channel, domain,
-                                 n_clusters=args.n_clusters)
+                                 n_clusters=args.n_clusters, seed=args.seed)
         concepts[domain] = found
         centroids[domain] = concept_centroids(decompositions[domain], found, channel)
         sizes = [c.size for c in found]
@@ -96,6 +96,7 @@ def main():
     parser.add_argument('--n_clusters', type=int, default=12)
     parser.add_argument('--n_items', type=int, default=50)
     parser.add_argument('--n_way', type=int, default=4)
+    parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--namer', default='qwen3.5:9b')
     parser.add_argument('--judge', default='gemma4:latest')
     parser.add_argument('--host', default='http://localhost:11434')

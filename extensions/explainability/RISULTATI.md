@@ -252,7 +252,101 @@ definita sulla singola raccomandazione invece che sull'intero spazio latente.
 
 ---
 
-## 6. Un risultato ritirato
+## 6. L'audit semantico: cosa contengono i canali (Contributo 2)
+
+L'attribuzione dice **quanto** un canale ha pesato. Non dice **di cosa parla**.
+Per una spiegazione in linguaggio naturale serve il contenuto, e qui entra
+l'LLM.
+
+Il procedimento: si raggruppano gli item vicini nel sottospazio di ciascun
+dominio, un LLM (`qwen3.5:9b`) nomina i gruppi **alla cieca** — solo titoli e
+categorie, mescolati, senza sapere dominio, canale o posizione — e un **secondo**
+LLM (`gemma4`) verifica che quei nomi identifichino davvero i gruppi.
+
+### 6.1 Le etichette sono valide
+
+Test a 4 alternative su item **tenuti da parte**, mai visti durante il naming:
+
+| | corretti | accuratezza | p |
+|---|---|---|---|
+| shared, source | 12/29 | 41.4% | 0.039 |
+| shared, target | 17/29 | 58.6% | 0.0001 |
+| base, source | 15/30 | 50.0% | 0.003 |
+| base, target | 16/26 | 61.5% | 0.0001 |
+
+Tutte significative. Lo strumento misura qualcosa, quindi il resto è
+interpretabile. Era il cancello del piano: se le etichette fossero state
+plausibili ma vuote, ci saremmo fermati qui.
+
+### 6.2 Il canale shared porta una corrispondenza cross-domain reale
+
+Il test confronta **due accoppiamenti indipendenti**: quello che il modello ha
+codificato (per ogni cluster source, il cluster target col centroide più vicino)
+e quello che l'LLM legge dalle sole etichette, senza vedere la geometria.
+
+| canale | accordo | p contro il caso (25%) |
+|---|---|---|
+| **shared** | 10/21 = **47.6%** | **0.021** |
+| base | 8/25 = 32.0% | 0.27 |
+
+Quando il modello avvicina un gruppo di prodotti elettronici a un gruppo di capi
+d'abbigliamento, quell'accostamento ha un senso leggibile quasi metà delle volte.
+Sull'embedding grezzo, senza disentanglement, la stessa procedura resta al caso.
+
+**È notevole perché nessuno l'ha chiesto al modello.** `cl_sim_weight` allinea i
+canali comuni **degli utenti**: non esiste alcun termine di allineamento
+cross-domain sugli item. La corrispondenza semantica fra gli item si è formata da
+sola, propagandosi attraverso lo spazio utente condiviso.
+
+**Il limite, da dichiarare insieme al risultato.** Il confronto **diretto** fra i
+due canali non è significativo: Fisher dà **p = 0.37**. Con questi numeri
+servirebbero circa 39 punti di differenza per concludere, e ne abbiamo 15. Quindi
+si può dire che shared batte il caso e base no, **non** che shared sia meglio di
+base.
+
+### 6.3 Ma la corrispondenza è un imbuto
+
+Quanti cluster target distinti vengono raggiunti dai 30 cluster source:
+
+| canale | osservato (3 seed) | atteso a caso |
+|---|---|---|
+| **shared** | 14 (13, 14, 15) | 19.2 |
+| base | 17 (16, 17, 19) | 19.2 |
+
+Il canale base è **indistinguibile dal caso**: due grafi separati, con un solo
+item in comune, non hanno motivo di corrispondersi. Il canale shared è
+**significativamente più concentrato del caso**: molti cluster source convergono
+su poche regioni target.
+
+E otto dei trenta puntano su cluster target che l'LLM **non ha saputo nominare**.
+Non è un effetto della dimensione: il target più attrattivo del run a 12 cluster
+era il **più piccolo** dei dodici (1.297 item).
+
+Convivono quindi due cose: **dove la corrispondenza è leggibile è anche corretta,
+ma in un terzo dei casi punta su regioni che non significano nulla.**
+
+### 6.4 Un bug che vale la pena raccontare
+
+Il primo run dava, sul dominio source, una validità del **16.7% — sotto il caso
+del 25%**. Un risultato sotto il caso è quasi sempre il segno di un errore a
+monte, non di un fenomeno debole.
+
+Lo era: leggevo gli item del source dalla decomposizione del **target**, dove
+quelle righe non sono mai state addestrate. Norma media **0.021** contro 0.591.
+Stavo raggruppando rumore, e infatti i cluster venivano tutti della stessa
+dimensione (5116–5295), che è la firma di k-means su dati senza struttura.
+
+Corretto l'errore, la validità del source passa a **58.3%** e le etichette
+diventano distinte ("DSLR and Mirrorless Camera Accessories", "Computer Internal
+Components and Peripherals") invece di dodici varianti della stessa frase.
+
+Ora ogni dominio viene decomposto dalla propria propagazione, e lo script stampa
+la norma media dei canali: se ricompare un valore intorno a 0.02, il problema si
+vede prima di diventare un risultato.
+
+---
+
+## 7. Un risultato ritirato
 
 All'inizio sembrava emergere che più un utente ha storia nel dominio target, più
 la raccomandazione dipende dal transfer. Sarebbe stato il contrario
@@ -272,7 +366,7 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
 
 ---
 
-## 7. Limiti
+## 8. Limiti
 
 - **Un seed per configurazione.** Niente è stato replicato.
 - I confronti tra le due direzioni cambiano più variabili insieme. Lo sweep
@@ -298,10 +392,18 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
 - **Una previsione sbagliata**, annotata: pensavo che l'informazione di dominio
   stesse nelle componenti principali della base. Rimosse le prime cinquanta su
   256, il probe MLP resta al 98.6% (controllo con direzioni casuali: 98.3%).
+- **Una seconda previsione sbagliata**: mi aspettavo che l'audit semantico (§6)
+  mostrasse che il canale shared non aggiunge nulla rispetto all'embedding
+  grezzo. È emerso il contrario. Vale la pena registrarlo perché era una
+  previsione motivata — non esiste una loss di allineamento sugli item — e si è
+  rivelata falsa.
+- L'audit semantico usa **un solo clustering per canale** (30 gruppi) e un solo
+  checkpoint. La degenerazione dell'imbuto è stabile su tre seed, la
+  corrispondenza semantica no: quella è stata misurata una volta sola.
 
 ---
 
-## 8. Prossimi passi
+## 9. Prossimi passi
 
 **1. Douban Movie↔Book.** Il run con il miglior rapporto valore/costo: testa il
 punto più estremo della Figura 3 (28.04/71.96) e aggiunge una terza coppia a
@@ -312,11 +414,14 @@ tutto il resto.
 **3. Controfattuale**: azzerare il canale shared, ricalcolare le classifiche, e
 passare dall'attribuzione alla causalità.
 
-**4. Contributo 2**, descritto nel piano a parte.
+**4. Chiudere il confronto shared contro base** (§6.2). Oggi shared batte il caso
+e base no, ma il confronto diretto fra i due non è significativo (p = 0.37).
+Servono più cluster, più seed, o un secondo checkpoint: è la differenza fra "il
+disentanglement produce corrispondenza semantica" e "non lo abbiamo dimostrato".
 
 ---
 
-## 9. Il contributo
+## 10. Il contributo
 
 L'obiettivo è **spiegare le raccomandazioni cross-domain in modo verificabile**.
 
@@ -355,8 +460,14 @@ sarebbe fuorviante — dire a un utente "ti consigliamo questo per i gusti
 trasferiti dall'altro dominio" presuppone che quel canale contenga davvero
 conoscenza trasferita, e la sezione 5 mostra che non è così.
 
-**Il limite da dichiarare.** τ non ha ancora prodotto un risultato scientifico
-stabile sui pattern di transfer: l'unico candidato è stato ritirato (sezione 6).
-Al momento il suo valore dimostrato è diagnostico — riconoscere il collasso della
-separazione — e come base per il Contributo 2, che aggiunge il livello semantico
-alle spiegazioni numeriche.
+**Il Contributo 2 aggiunge il livello semantico** (§6). L'attribuzione dice
+quanto pesa un canale; l'audit dice di cosa parla. Ed è la parte che ha prodotto
+il primo risultato **positivo** sul modello: il canale shared porta una
+corrispondenza cross-domain che un LLM riconosce (47.6% contro un caso del 25%),
+mentre l'embedding grezzo resta al caso — pur non esistendo alcuna loss che
+allinei gli item fra i due domini.
+
+**Il limite da dichiarare.** τ non ha ancora prodotto un risultato stabile sui
+pattern di transfer: l'unico candidato è stato ritirato (§7). Il suo valore
+dimostrato è diagnostico — riconoscere il collasso della separazione — e come
+base per l'audit semantico.

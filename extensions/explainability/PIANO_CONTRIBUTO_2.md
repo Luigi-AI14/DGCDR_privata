@@ -1,9 +1,17 @@
-# Contributo 2 — il piano
+# Contributo 2 — piano ed esito
 
-Aggiornato il 26 luglio 2026, dopo la Fase 1. Branch `explainability-2`.
+Aggiornato il 27 luglio 2026. Branch `explainability-2`.
 
 La prima versione di questo piano è stata in gran parte falsificata dai suoi
-stessi cancelli. Quella che segue è la versione che resta in piedi.
+stessi cancelli. Quella che segue è la versione che resta in piedi, con i
+risultati di quanto è già stato eseguito.
+
+> **Stato: passi 1-4 eseguiti.** I numeri sono in `RISULTATI.md` §6. In breve:
+> le etichette superano il test di validità su tutti e quattro i casi, e il
+> canale shared produce una corrispondenza cross-domain riconoscibile
+> (47.6% contro un caso del 25%, p = 0.021) mentre l'embedding grezzo resta al
+> caso (32.0%, p = 0.27). Il confronto **diretto** fra i due canali non è però
+> significativo (Fisher p = 0.37): resta da chiudere.
 
 ---
 
@@ -168,25 +176,42 @@ script deve dirlo invece di procedere in silenzio.
 
 ---
 
-## 7. Come può fallire
+## 7. I modi in cui poteva fallire, e cosa è successo
 
-Vale la pena scriverlo prima, non dopo.
+Erano stati scritti prima di eseguire. Come sono andati:
 
-- **Le etichette non superano il Passo 3** → lo strumento non misura, ci si ferma.
-- **I concetti shared si accoppiano come quelli base** → l'allineamento non
-  aggiunge nulla. È il risultato che mi aspetto, ed è pubblicabile.
-- **Nessuno dei due si accoppia sopra il caso** → i sottospazi non hanno alcuna
-  corrispondenza cross-domain. Risultato più forte, ma va escluso che dipenda da
-  cluster incoerenti: per questo il Passo 3 viene prima.
-- **Circolarità** → chi nomina e chi accoppia devono essere due LLM diversi, ed
-  entrambi ciechi sulla provenienza dei dati.
-- **Contaminazione da popolarità** → i cluster potrebbero riflettere la
-  popolarità invece del contenuto. Da controllare correlando la dimensione dei
-  cluster con la popolarità media degli item.
+| previsto | esito |
+|---|---|
+| Le etichette non superano il Passo 3 | **non successo** — validità significativa in tutti e quattro i casi |
+| I concetti shared si accoppiano come quelli base | **non successo** — shared batte il caso, base no. Era il risultato che mi aspettavo, ed era sbagliato |
+| Nessuno dei due si accoppia sopra il caso | **non successo** per shared, **successo** per base |
+| Circolarità fra chi nomina e chi giudica | evitata: `qwen3.5:9b` nomina, `gemma4` giudica, entrambi ciechi |
+| Contaminazione da popolarità | **escluso** — il cluster target più attrattivo era il più piccolo (1.297 item), non il più grande |
+
+Un modo di fallire che **non** avevo previsto si è invece verificato: leggere gli
+item di un dominio dalla decomposizione dell'altro, dove non sono mai stati
+addestrati. Dava validità **sotto il caso** (16.7% contro 25%), che è il segnale
+tipico di un errore a monte. Corretto, sale a 58.3%. Il racconto completo è in
+`RISULTATI.md` §6.4.
+
+## 8. Cosa resta da fare
+
+**Chiudere il confronto shared contro base.** Oggi sappiamo che shared batte il
+caso e base no, ma non che shared sia meglio di base: servirebbero circa 39 punti
+di differenza per concludere a questi numeri, e ne abbiamo 15. Più cluster, più
+seed, o un secondo checkpoint.
+
+**Verificare la stabilità della corrispondenza semantica.** La degenerazione
+dell'imbuto è stata verificata su tre seed e due granularità. La corrispondenza
+semantica no: è stata misurata una volta sola.
+
+**Capire cosa sono le regioni senza tema.** Otto cluster source su trenta puntano
+su cluster target che l'LLM non ha saputo nominare. Sono il pezzo che non
+funziona, e nessuno ha ancora guardato cosa contengano.
 
 ---
 
-## 8. Il ruolo dell'LLM
+## 9. Il ruolo dell'LLM
 
 Il Contributo 1 spiega **quanto**: la quota del punteggio che viene da ciascun
 canale, in modo esatto e verificabile. Il Contributo 2 spiega **cosa**: di che
