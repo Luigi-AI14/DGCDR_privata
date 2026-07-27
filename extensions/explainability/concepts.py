@@ -183,6 +183,41 @@ def principal_directions(model, decomposition, channel, domain, n_directions=12,
     return directions
 
 
+def structure_correlation(model, decomposition, channel_a, channel_b, domain,
+                          n_sample=2000, seed=0):
+    """Do two channels organise the items in the same way?
+
+    Compares the item-item similarity matrix each channel induces. Unlike
+    clustering this is deterministic and has no free parameters, and unlike the
+    cosine between channels it sees structure rather than alignment: two
+    perfectly orthogonal channels can still rank every pair of items
+    identically, which is exactly what DGCDR's item side does.
+
+    Returns (observed, null). The null comes from shuffling one matrix, so a
+    value near it means the two channels share no structure at all.
+    """
+    item_ids = domain_item_ids(model, domain)
+    generator = torch.Generator().manual_seed(seed)
+    picked = torch.as_tensor(item_ids)[
+        torch.randperm(len(item_ids), generator=generator)[:n_sample]]
+
+    def similarity(channel):
+        X = F.normalize(decomposition.item_channels[channel][picked].cpu(), dim=1)
+        S = (X @ X.t()).numpy()
+        return S[~np.eye(S.shape[0], dtype=bool)]
+
+    a, b = similarity(channel_a), similarity(channel_b)
+
+    def spearman(x, y):
+        rx = np.argsort(np.argsort(x)).astype(float)
+        ry = np.argsort(np.argsort(y)).astype(float)
+        return float(np.corrcoef(rx, ry)[0, 1])
+
+    rng = np.random.default_rng(seed)
+    null = float(np.mean([spearman(a, rng.permutation(b)) for _ in range(3)]))
+    return spearman(a, b), null
+
+
 def cluster_category_purity(concepts, catalogue, seed=42, n_null=20):
     """M0 -- are the clusters semantically coherent at all, without any LLM?
 
