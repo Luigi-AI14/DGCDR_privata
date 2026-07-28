@@ -437,8 +437,9 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
   diverse, e il confronto va appoggiato sul gap di dCor.
 - Il gap di dCor dipende dal numero di utenti campionati. Confrontabile solo a
   `--dcor_sample` uguale.
-- **Sull'attention restano non misurate le due barre di Sport&Cloth**, quattro
-  su sei sono verificate su due coppie indipendenti.
+- **Sull'attention restano non misurate le due barre di Sport&Cloth**: il
+  dataset (149k utenti, 149k item) eccede i 12 GB di VRAM disponibili. Quattro
+  barre su sei sono verificate, su due coppie di domini indipendenti.
 - **Bug noto in `dgcdr.py`**, rilevante per il Contributo 2: il caricamento degli
   embedding testuali indicizza l'array del dominio source con l'ID fuso, che è
   compattato. Su CDs/Instruments mappa correttamente solo i 3.609 item del
@@ -467,7 +468,8 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
 
 ## 9. Prossimi passi
 
-**1. Sport&Cloth**, le ultime due barre della Figura 3 rimaste non misurate.
+**1. Sport&Cloth su hardware più capiente**, per completare la Figura 3. In
+locale non è possibile: il training da solo richiede ~11,7 GB di VRAM.
 
 **2. Replica con più seed**, per stabilire la stabilità delle misure.
 
