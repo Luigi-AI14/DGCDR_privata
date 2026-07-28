@@ -1,8 +1,8 @@
 # Cosa abbiamo fatto e cosa abbiamo trovato
 
-Documento di lavoro, 26 luglio 2026. Branch `explainability-1`.
-Cinque checkpoint analizzati: CDs→Instruments, Elec→Cloth, e Cloth→Elec a tre
-valori di `cl_org_weight`.
+Documento di lavoro, aggiornato al 28 luglio 2026. Branch `explainability-2`.
+Sei checkpoint analizzati: CDs→Instruments, Elec→Cloth, Cloth→Elec a tre valori
+di `cl_org_weight`, e Movie→Book su Douban.
 
 ---
 
@@ -56,7 +56,7 @@ Qui il meccanismo è aritmetico. DGCDR fonde i canali con una somma e il puntegg
 un'approssimazione e non è un surrogato come LIME o SHAP.
 
 Ogni esecuzione ricompone i canali e li confronta con l'output vero del modello.
-Se non coincidono, si ferma. Sui cinque checkpoint l'errore relativo sta tra
+Se non coincidono, si ferma. Sui sei checkpoint l'errore relativo sta tra
 1e-07 e 3e-07: solo arrotondamento in virgola mobile.
 
 ---
@@ -72,9 +72,15 @@ Tabella 3 dell'articolo:
 | | NDCG@20 | .0173 | .0173 | **0%** |
 | **Cloth→Elec** | Recall@20 | .0403 | .0397 | −1.5% |
 | | NDCG@20 | .0247 | .0244 | −1.2% |
+| **Movie→Book** | Recall@20 | .1369 | .1341 | −2.0% |
+| | MRR@20 | .1557 | .1528 | −1.9% |
+| | HR@20 | .5505 | .5424 | −1.5% |
+| | NDCG@20 | .0954 | .0934 | −2.1% |
 
-Scarti tra l'1% e il 3%, cioè normale variabilità da seed. **Tutto quello che
-segue riguarda il modello pubblicato**, non una nostra versione difettosa.
+Scarti tra l'1% e il 3% su **due coppie di domini molto diverse** — Amazon
+(sparsa, 35k utenti) e Douban (densa, 10k utenti e 2,3 milioni di interazioni).
+È normale variabilità da seed. **Tutto quello che segue riguarda il modello
+pubblicato**, non una nostra versione difettosa.
 
 ---
 
@@ -148,6 +154,20 @@ cosine similarity, di aver ottenuto risultati peggiori, e di aver preferito
 l'ortogonalità perché *"provides a clearer separation between subspaces"*. La
 separazione è chiara nello spazio, non nell'informazione.
 
+**Lo stesso quadro su Douban**, che è una coppia di domini completamente diversa
+— densa invece che sparsa, contenuti invece che e-commerce:
+
+| Movie→Book | source | target |
+|---|---|---|
+| Coseno — *ideale 0* | 0.0094 | 0.0074 |
+| dCor gap sul null — *ideale 0* | +0.6453 | +0.4732 |
+| Probe lineare su e^c — *ideale 50%* | 99.56% | |
+| Probe MLP su e^c — *ideale 50%* | 99.81% | |
+| Disent. score MLP — *ideale >35%* | 0.17% | |
+
+Canali ortogonali fino a 0.007, e riconoscibili per dominio al 99.8%. Il reperto
+non dipende dal dataset.
+
 ### 5.2 Sul lato item la separazione non avviene affatto
 
 DGCDR disentangla sia gli utenti sia gli item. Abbiamo guardato gli item, cosa
@@ -210,13 +230,26 @@ misurato:
 [a_c, a_s] = softmax( e_g · [e_c, e_s] / √d )
 ```
 
-| Elec&Cloth | Figura 3 | nostra misura |
-|---|---|---|
-| shared | 80.55% / 80.78% | **50.10% / 49.52%** |
-| specific | 19.45% / 19.22% | 49.90% / 50.48% |
+Misurato su **quattro delle sei barre** della Figura 3, su due coppie di domini:
 
-Per produrre 80.55/19.45 servirebbe un gap di logit pari a 22.74. Nel nostro
-modello è +0.06 sul source e −0.31 sul target.
+| barra | Figura 3 (shared/specific) | nostra misura |
+|---|---|---|
+| Elec | 80.55 / 19.45 | **50.10 / 49.90** |
+| Cloth | 80.78 / 19.22 | **49.52 / 50.48** |
+| **Movie** | 28.04 / 71.96 | **49.04 / 50.96** |
+| **Book** | 71.45 / 28.55 | **47.60 / 52.40** |
+
+Douban è il caso più severo, ed è quello che chiude la questione. Il paper mostra
+Movie e Book su **lati opposti**, con 43 punti di scarto fra loro, e ci costruisce
+sopra l'argomento sul "Domain Type": i domini di contenuto preferirebbero le
+feature specific, quelli di consumo le shared. Noi misuriamo 49.04 e 47.60:
+**1,4 punti di differenza**. Non è che i valori siano diversi — il pattern
+qualitativo su cui poggia l'affermazione non esiste.
+
+Per produrre i valori della figura servirebbe un gap di logit di 22.74 su
+Elec/Cloth, −15.1 su Movie e +14.7 su Book. Misuriamo +0.06, −0.31, −0.62 e
+−1.54. Su Movie il segno è giusto ma il valore è 24 volte troppo piccolo; su Book
+il segno è **opposto**.
 
 Abbiamo escluso che la figura riporti un'altra quantità: né i pesi di attention
 (50.10%), né la proporzione delle norme dopo l'attention (49.52%), né quella
@@ -404,8 +437,8 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
   diverse, e il confronto va appoggiato sul gap di dCor.
 - Il gap di dCor dipende dal numero di utenti campionati. Confrontabile solo a
   `--dcor_sample` uguale.
-- **Sull'attention abbiamo misurato una coppia di domini su tre.** Per ora si può
-  dire "su Elec/Cloth non è riproducibile", non "la Figura 3 è sbagliata".
+- **Sull'attention restano non misurate le due barre di Sport&Cloth**, quattro
+  su sei sono verificate su due coppie indipendenti.
 - **Bug noto in `dgcdr.py`**, rilevante per il Contributo 2: il caricamento degli
   embedding testuali indicizza l'array del dominio source con l'ID fuso, che è
   compattato. Su CDs/Instruments mappa correttamente solo i 3.609 item del
@@ -434,9 +467,7 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
 
 ## 9. Prossimi passi
 
-**1. Douban Movie↔Book.** Il run con il miglior rapporto valore/costo: testa il
-punto più estremo della Figura 3 (28.04/71.96) e aggiunge una terza coppia a
-tutto il resto.
+**1. Sport&Cloth**, le ultime due barre della Figura 3 rimaste non misurate.
 
 **2. Replica con più seed**, per stabilire la stabilità delle misure.
 
