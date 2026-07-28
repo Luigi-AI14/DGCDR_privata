@@ -285,6 +285,60 @@ definita sulla singola raccomandazione invece che sull'intero spazio latente.
 
 ---
 
+### 5.6 Il controfattuale: τ predice cosa si rompe, ma il canale non serve
+
+Finora τ diceva **come è composto** un punteggio. Non diceva cosa succederebbe
+togliendo un canale — sono due domande diverse, e solo la seconda è causale.
+
+Il test: azzerare un canale, ricalcolare le classifiche, e guardare cosa cambia.
+
+**τ è causalmente valida.** Le raccomandazioni che escono dalla top-20 quando si
+azzera il canale shared sono quelle che τ aveva indicato come shared-driven:
+
+| | τ medio |
+|---|---|
+| raccomandazioni **cadute** | **0.4833** (n=461) |
+| raccomandazioni **rimaste** | **0.4160** (n=5539) |
+| differenza | **+0.0673**, p < 0.0001 (permutazione) |
+
+τ non è contabilità che torna: **predice cosa si rompe**. È il test più severo
+che si possa fare a questo contributo, ed è quello che chiude il limite
+dichiarato in §7. L'effetto è però modesto — 6.7 punti di scarto, e la
+correlazione fra τ e nuovo rango è +0.097: significativa grazie ai 6.000
+campioni, non grande.
+
+**Ma il canale non serve all'accuratezza.**
+
+| canale azzerato | Recall@20 | top-20 che sopravvive |
+|---|---|---|
+| intatto | 0.0202 | — |
+| **shared** | **0.0210** | 92.3% |
+| specific | 0.0194 | 91.2% |
+| base | 0.0194 | 93.5% |
+
+Togliere il canale shared non peggiora niente: semmai migliora marginalmente. I
+controlli escludono che sia un artefatto — azzerando `specific` o `base` si
+perde il 4%, quindi l'ablazione una differenza la produce, solo non su shared.
+
+Vale però anche il contrario: **nessun canale conta molto**. Nessuna ablazione
+sposta l'accuratezza oltre il 4%, e più del 90% delle raccomandazioni resta
+identico. Il modello è ridondante al punto che rimuovere un terzo della sua
+rappresentazione quasi non si nota.
+
+*(0.0202 contro lo 0.0253 del paper è una differenza di protocollo: 300 utenti
+campionati e mascheramento nostro, contro la valutazione completa di RecBole. Il
+confronto intatto/ablato è interno e coerente.)*
+
+**Come vanno letti insieme.** Le due affermazioni sono compatibili:
+
+> **τ misura correttamente una quantità che nel modello conta poco.**
+
+Lo strumento fa quello che promette. Il canale che misura è quasi decorativo dal
+punto di vista dell'accuratezza — in linea con §5.1, dove moltiplicare
+`cl_org_weight` per mille non spostava Recall di un decimale.
+
+---
+
 ## 6. L'audit semantico: cosa contengono i canali (Contributo 2)
 
 L'attribuzione dice **quanto** un canale ha pesato. Non dice **di cosa parla**.
@@ -427,8 +481,8 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
 - I confronti tra le due direzioni cambiano più variabili insieme. Lo sweep
   interno a Cloth→Elec è a variabile singola, ed è quello su cui poggia §5.1.
 - I dataset sono 10-core: **nessun utente davvero cold-start**.
-- τ descrive **come è composto** il punteggio, non cosa succederebbe azzerando un
-  canale e ricalcolando la classifica.
+- Il controfattuale (§5.6) è stato misurato su **un solo checkpoint** e 300
+  utenti campionati.
 - τ alto **non** significa raccomandazione migliore. È un'attribuzione, non una
   valutazione.
 - La decomposizione esatta richiede `fuse_mode='attention'`, e solo gli utenti
@@ -531,7 +585,13 @@ p = 0.013), mentre l'embedding grezzo resta al caso — pur non esistendo alcuna
 loss che allinei gli item fra i due domini. Che shared sia meglio di base resta
 però non dimostrato (p = 0.17).
 
-**Il limite da dichiarare.** τ non ha ancora prodotto un risultato stabile sui
-pattern di transfer: l'unico candidato è stato ritirato (§7). Il suo valore
-dimostrato è diagnostico — riconoscere il collasso della separazione — e come
-base per l'audit semantico.
+**La validazione causale** (§5.6) è la prova più severa che il framework abbia
+superato: le raccomandazioni che crollano azzerando il canale shared sono quelle
+che τ aveva indicato, con p < 0.0001. τ non è una scomposizione che torna per
+costruzione, misura qualcosa che il modello fa davvero.
+
+**Il limite da dichiarare.** τ non ha prodotto un risultato stabile sui pattern
+di transfer: l'unico candidato è stato ritirato (§7). E la quantità che misura
+correttamente conta poco per l'accuratezza — azzerare il canale shared non
+peggiora le raccomandazioni. Lo strumento è valido; l'oggetto che misura è
+meno importante di quanto l'architettura suggerisca.
