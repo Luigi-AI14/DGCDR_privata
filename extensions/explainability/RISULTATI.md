@@ -292,38 +292,47 @@ togliendo un canale — sono due domande diverse, e solo la seconda è causale.
 
 Il test: azzerare un canale, ricalcolare le classifiche, e guardare cosa cambia.
 
-**τ è causalmente valida.** Le raccomandazioni che escono dalla top-20 quando si
-azzera il canale shared sono quelle che τ aveva indicato come shared-driven:
+**τ è causalmente valida, e replica su due dataset.** Le raccomandazioni che
+escono dalla top-20 quando si azzera il canale shared sono quelle che τ aveva
+indicato come shared-driven:
 
-| | τ medio |
-|---|---|
-| raccomandazioni **cadute** | **0.4833** (n=461) |
-| raccomandazioni **rimaste** | **0.4160** (n=5539) |
-| differenza | **+0.0673**, p < 0.0001 (permutazione) |
+| τ medio | Elec→Cloth | Douban Movie→Book |
+|---|---|---|
+| raccomandazioni **cadute** | 0.4833 (n=461) | 0.4542 (n=501) |
+| raccomandazioni **rimaste** | 0.4160 (n=5539) | 0.3748 (n=5499) |
+| differenza | **+0.0673** | **+0.0794** |
+| p (permutazione) | **< 0.0001** | **< 0.0001** |
+| corr(τ, nuovo rango) | +0.097 | +0.118 |
 
-τ non è contabilità che torna: **predice cosa si rompe**. È il test più severo
-che si possa fare a questo contributo, ed è quello che chiude il limite
-dichiarato in §7. L'effetto è però modesto — 6.7 punti di scarto, e la
-correlazione fra τ e nuovo rango è +0.097: significativa grazie ai 6.000
-campioni, non grande.
+τ non è contabilità che torna: **predice cosa si rompe**, su due coppie di
+domini molto diverse. È il test più severo che si possa fare a questo
+contributo, e chiude il limite che era dichiarato in §7.
+
+L'effetto è modesto — 7-8 punti di scarto, correlazione intorno a +0.1 —
+significativo grazie ai 6.000 campioni per dataset, non grande.
 
 **Ma il canale non serve all'accuratezza.**
 
-| canale azzerato | Recall@20 | top-20 che sopravvive |
+| canale azzerato | Elec→Cloth | Douban |
 |---|---|---|
-| intatto | 0.0202 | — |
-| **shared** | **0.0210** | 92.3% |
-| specific | 0.0194 | 91.2% |
-| base | 0.0194 | 93.5% |
+| intatto | 0.0202 | 0.0998 |
+| **shared** | 0.0210 (**+4.0%**) | 0.1036 (**+3.7%**) |
+| specific | 0.0194 (−4.0%) | 0.1042 (+4.3%) |
+| base | 0.0194 (−4.0%) | 0.0992 (−0.6%) |
 
-Togliere il canale shared non peggiora niente: semmai migliora marginalmente. I
-controlli escludono che sia un artefatto — azzerando `specific` o `base` si
-perde il 4%, quindi l'ablazione una differenza la produce, solo non su shared.
+Su entrambi i dataset, **togliere il canale shared non costa nulla**: semmai
+migliora di circa il 4%. E oltre il 90% della top-20 resta identica.
 
-Vale però anche il contrario: **nessun canale conta molto**. Nessuna ablazione
-sposta l'accuratezza oltre il 4%, e più del 90% delle raccomandazioni resta
-identico. Il modello è ridondante al punto che rimuovere un terzo della sua
-rappresentazione quasi non si nota.
+**Una correzione rispetto alla prima stesura.** Avevo scritto che i controlli
+escludevano un artefatto, perché su Elec→Cloth azzerare `specific` o `base`
+costava il 4%. Su Douban non è così: azzerare `specific` migliora del 4,3% e
+`base` è neutro. L'asimmetria fra shared e specific **non replica**, quindi non
+si può sostenere.
+
+Quello che replica, e che resta affermabile, è più semplice e più radicale:
+**nessuna ablazione sposta l'accuratezza oltre il 4%, in nessuna direzione, su
+nessuno dei due dataset.** Il modello è ridondante al punto che rimuovere un
+terzo della sua rappresentazione quasi non si nota.
 
 *(0.0202 contro lo 0.0253 del paper è una differenza di protocollo: 300 utenti
 campionati e mascheramento nostro, contro la valutazione completa di RecBole. Il
@@ -481,8 +490,13 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
 - I confronti tra le due direzioni cambiano più variabili insieme. Lo sweep
   interno a Cloth→Elec è a variabile singola, ed è quello su cui poggia §5.1.
 - I dataset sono 10-core: **nessun utente davvero cold-start**.
-- Il controfattuale (§5.6) è stato misurato su **un solo checkpoint** e 300
-  utenti campionati.
+- Il controfattuale (§5.6) è stato misurato su due checkpoint, 300 utenti
+  campionati ciascuno. La validazione di τ replica; il comportamento dei canali
+  di controllo no.
+- **Un'affermazione ritirata**: avevo scritto che azzerare `specific` o `base`
+  costa il 4% mentre azzerare `shared` no, presentandolo come controllo. Vale
+  su Elec→Cloth ma non su Douban, dove anche `specific` migliora. L'asimmetria
+  fra i canali non è sostenibile.
 - τ alto **non** significa raccomandazione migliore. È un'attribuzione, non una
   valutazione.
 - La decomposizione esatta richiede `fuse_mode='attention'`, e solo gli utenti
