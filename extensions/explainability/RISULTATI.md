@@ -154,6 +154,35 @@ cosine similarity, di aver ottenuto risultati peggiori, e di aver preferito
 l'ortogonalità perché *"provides a clearer separation between subspaces"*. La
 separazione è chiara nello spazio, non nell'informazione.
 
+**Il meccanismo: il modello imbroglia rimpicciolendo.** La penalità è sul
+prodotto scalare **grezzo**, e il prodotto scalare si scompone così:
+
+```
+e^c · e^s  =  ‖e^c‖ · ‖e^s‖ · cos(angolo)
+```
+
+Ci sono quindi due modi di ridurlo: ruotare i vettori — che è l'obiettivo — o
+**accorciarli** — che non serve a niente. Misurando le norme lungo uno sweep su
+Elec→Cloth:
+
+| `cl_org_weight` | ‖e^c‖ | ‖e^s‖ | coseno |
+|---|---|---|---|
+| 0.01 | 1.146 | 1.423 | 0.159 |
+| 0.1 | 1.218 | 1.393 | 0.037 |
+| **10** | **0.286** | 1.212 | 0.014 |
+
+Da 0.1 a 10 il canale shared **si accorcia di 4,3 volte**, mentre lo specific
+resta dov'era. Scomponendo la riduzione del prodotto scalare: **il 57% viene
+dall'accorciamento, solo il 38% dalla rotazione.**
+
+E accorciare non toglie informazione: un vettore diviso per quattro contiene
+esattamente quello che conteneva prima. Il probe infatti **standardizza le
+feature**, quindi la scala gli è invisibile — ed è la ragione per cui legge 99%
+comunque, mentre coseno e loss migliorano.
+
+Il modello ha speso la maggior parte dello sforzo su una riduzione di scala che
+la loss premia e che sull'obiettivo non incide.
+
 **Lo stesso quadro su Douban**, che è una coppia di domini completamente diversa
 — densa invece che sparsa, contenuti invece che e-commerce:
 
@@ -322,6 +351,22 @@ significativo grazie ai 6.000 campioni per dataset, non grande.
 
 Su entrambi i dataset, **togliere il canale shared non costa nulla**: semmai
 migliora di circa il 4%. E oltre il 90% della top-20 resta identica.
+
+**Vale su tutto lo sweep**, quindi non dipende dalla taratura
+dell'ortogonalità. Elec→Cloth, variando solo `cl_org_weight`:
+
+| `cl_org_weight` | 0.01 | 0.1 | 10 |
+|---|---|---|---|
+| costo di azzerare shared | +4.2% | +4.0% | +3.6% |
+| top-20 che sopravvive | 93.2% | 92.3% | **99.3%** |
+| τ delle cadute | 0.4762 | 0.4833 | **0.0491** |
+| τ delle rimaste | 0.4051 | 0.4160 | **0.0338** |
+| differenza (tutte p ≤ 0.0001) | +0.0711 | +0.0673 | +0.0153 |
+
+τ predice cosa si rompe a **tutti e tre i pesi**. Ma a `org=10` i valori di τ
+crollano di dieci volte e il 99,3% della top-20 sopravvive: è la firma
+dell'accorciamento descritto in §5.1. Spingendo sull'ortogonalità il modello non
+rende il canale indipendente, lo **spegne**.
 
 **Una correzione rispetto alla prima stesura.** Avevo scritto che i controlli
 escludevano un artefatto, perché su Elec→Cloth azzerare `specific` o `base`
