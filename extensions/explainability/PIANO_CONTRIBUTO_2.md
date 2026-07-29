@@ -6,14 +6,17 @@ La prima versione di questo piano è stata in gran parte falsificata dai suoi
 stessi cancelli. Quella che segue è la versione che resta in piedi, con i
 risultati di quanto è già stato eseguito.
 
-> **Stato: passi 1-4 eseguiti, su quattro clusterizzazioni.** I numeri sono in
-> `RISULTATI.md` §6. In breve: le etichette superano il test di validità, e il
-> canale shared produce una corrispondenza cross-domain riconoscibile — 34.8%
-> contro un caso del 25%, p = 0.013 su 112 coppie — mentre l'embedding grezzo
-> resta al caso (26.7%, p = 0.35).
+> **Stato: concluso.** I numeri sono in `RISULTATI.md` §6.
 >
-> **Il confronto diretto fra i due canali resta aperto** (Fisher p = 0.17), e
-> non si chiude aggiungendo cluster: vedi §8.
+> Lo strumento funziona: le etichette che l'LLM assegna ai sottospazi superano
+> un test di validità severo, quindi si può davvero dare un nome leggibile a
+> quei vettori.
+>
+> La domanda scientifica invece ha risposta negativa. **Il canale shared non
+> mostra una corrispondenza cross-domain semanticamente riconoscibile**, e non è
+> distinguibile dall'embedding grezzo. Il risultato che sembrava esserci si è
+> dissolto con l'arrivo dei dati, e la misura appaiata costruita apposta per
+> avere più potenza non lo conferma (p = 0.148). Vedi §8.
 
 ---
 
@@ -210,34 +213,47 @@ addestrati. Dava validità **sotto il caso** (16.7% contro 25%), che è il segna
 tipico di un errore a monte. Corretto, sale a 58.3%. Il racconto completo è in
 `RISULTATI.md` §6.4.
 
-## 8. Il confronto shared contro base, e perché non si chiude così
+## 8. Com'è finita: il confronto non regge
 
-Ci abbiamo provato con quattro clusterizzazioni, da 12 a 60 gruppi, due seed.
-Risultato: shared 34.8% su 112 coppie, base 26.7% su 150. Shared batte il caso
-(p = 0.013), base no (p = 0.35), la differenza fra i due no (p = 0.17).
+Abbiamo provato cinque clusterizzazioni, da 12 a 60 gruppi, seed diversi, e poi
+una misura statistica costruita apposta per avere più potenza. La risposta non
+cambia.
 
-**Aggiungere cluster non funziona, e i dati lo mostrano.** Passando da 30 a 60
-gruppi crollano entrambi i canali — shared da 47.6% a ~31%, base da 32% a ~25%.
-Più cluster significa etichette più simili fra loro dentro lo stesso dominio, e
-il giudice le confonde. Le coppie in più si pagano in risoluzione.
+**La scelta forzata, run dopo run:**
 
-È una tensione strutturale del disegno: la potenza statistica richiede molte
-coppie, le coppie richiedono molti cluster, e molti cluster distruggono la
-distinguibilità che il test misura. Non è una questione di compute.
+| run | shared | base |
+|---|---|---|
+| k=12 | 50.0% | 36.4% |
+| k=30 | 47.6% | 32.0% |
+| k=60, seed 42 | 30.2% | 27.8% |
+| k=60, seed 7 | 31.8% | 21.7% |
+| k=60, terzo | 31.9% | **37.0%** |
+| aggregato | 34.0% (54/159) | 29.4% (60/204) |
 
-Le due strade praticabili:
+Il primo numero, 47.6% su ventuno coppie, sembrava un risultato. Aggiungendo
+dati è sceso a 34.0%, e la differenza rispetto a base da 15.6 punti a 4.6. Nell'
+ultimo run il canale grezzo ha fatto meglio di quello disentangled.
 
-**Altri checkpoint.** Repliche genuinamente indipendenti, invece di
-clusterizzazioni dello stesso modello. Il tentativo in locale è fallito per un
-motivo prosaico: i modelli allenati sulla VM riferiscono directory di dataset
-chiamate `Cloth_Elec_...` mentre in locale sono `AmazonCloth_AmazonElec_...`.
-Sulla VM si caricherebbero senza problemi.
+**La misura graduata**, quella che doveva chiudere la questione, dà:
 
-**Una misura graduata al posto della scelta forzata.** Oggi ogni chiamata
-restituisce un bit: giusto o sbagliato fra quattro alternative. Chiedendo invece
-un punteggio di somiglianza sulla coppia geometrica e su una casuale, e
-confrontando le distribuzioni con un test appaiato, si estrae molta più
-informazione dalla stessa spesa. È probabilmente la strada migliore.
+| canale | coppia geometrica | controlli | differenza | p |
+|---|---|---|---|---|
+| shared | 5.94 | 5.46 | +0.48 | **0.148** |
+| base | 6.26 | 5.96 | +0.30 | 0.207 |
+
+Nessuno dei due significativo. Ha funzionato come progettata — ha ridotto il
+fabbisogno di coppie da circa 500 a 168 — ma ne abbiamo 47, e per averne di più
+servirebbero più cluster, che rendono le etichette indistinguibili. Le due
+esigenze si contraddicono, ed è un limite del disegno, non del compute.
+
+**Perché non ci appoggiamo al p = 0.007 dell'aggregato.** Aggrega
+clusterizzazioni dello stesso modello sullo stesso catalogo, quindi non sono
+misure indipendenti. E il test più potente, sugli stessi dati, non conferma.
+
+**Era prevedibile, e l'avevamo scritto.** `cl_sim_weight` allinea i canali comuni
+**degli utenti**; non esiste alcun termine che allinei gli item fra i due domini.
+Una corrispondenza a livello di prodotto sarebbe stata indiretta, ereditata
+attraverso lo spazio utente. I dati dicono che quell'eredità non arriva.
 
 ## 9. Le altre cose rimaste aperte
 

@@ -419,53 +419,86 @@ Tutte significative. Lo strumento misura qualcosa, quindi il resto è
 interpretabile. Era il cancello del piano: se le etichette fossero state
 plausibili ma vuote, ci saremmo fermati qui.
 
-### 6.2 Il canale shared porta una corrispondenza cross-domain, ma il confronto con base resta aperto
+### 6.2 La corrispondenza cross-domain: un risultato che si è dissolto
 
-Il test confronta **due accoppiamenti indipendenti**: quello che il modello ha
-codificato (per ogni cluster source, il cluster target col centroide più vicino)
-e quello che l'LLM legge dalle sole etichette, senza vedere la geometria.
+Questa doveva essere la domanda centrale del Contributo 2: quando il modello
+avvicina un gruppo di prodotti elettronici a un gruppo di capi d'abbigliamento,
+quell'accostamento ha un senso leggibile?
 
-Quattro clusterizzazioni dello stesso checkpoint, granularità e seed diversi:
+Il test confronta due accoppiamenti costruiti in modo indipendente. Il primo è
+quello che il modello ha codificato: per ogni cluster del dominio source, il
+cluster target il cui centroide è più vicino. Il secondo è quello che un LLM
+legge dalle sole etichette, senza vedere niente della geometria. Se i due vanno
+d'accordo più del caso, la corrispondenza geometrica ha un contenuto semantico.
 
-| run | shared | base | differenza |
-|---|---|---|---|
-| k=12 | 50.0% (2/4) | 36.4% | +14 |
-| k=30 | 47.6% (10/21) | 32.0% | +16 |
-| k=60, seed 42 | 30.2% (13/43) | 27.8% | +2 |
-| k=60, seed 7 | 31.8% (14/44) | 21.7% | +10 |
-| **aggregato** | **34.8%** (39/112) | **26.7%** (40/150) | **+8.2** |
+Il controllo decisivo è il canale **base**, cioè l'embedding grezzo senza alcun
+disentanglement: se anche lì la corrispondenza regge, non l'ha prodotta la
+separazione dei canali, c'era già nella struttura collaborativa.
 
-Cosa si può dire:
+**Cosa è successo, run dopo run.** All'inizio il risultato sembrava esserci, e
+netto:
 
-- **il canale shared batte il caso**: 34.8% contro 25%, **p = 0.013** su 112
-  coppie e quattro clusterizzazioni. Quando il modello avvicina un gruppo di
-  prodotti elettronici a un gruppo di capi d'abbigliamento, quell'accostamento ha
-  un senso leggibile più spesso di quanto accadrebbe a caso;
-- **l'embedding grezzo no**: 26.7%, p = 0.35;
-- **che shared sia meglio di base non è dimostrato**: Fisher dà **p = 0.17**.
+| run | shared | base |
+|---|---|---|
+| k=12 | 50.0% (2/4) | 36.4% |
+| k=30 | 47.6% (10/21) | 32.0% |
+| k=60, seed 42 | 30.2% (13/43) | 27.8% |
+| k=60, seed 7 | 31.8% (14/44) | 21.7% |
+| k=60, terzo | 31.9% (15/47) | **37.0%** |
+| **aggregato** | **34.0%** (54/159) | **29.4%** (60/204) |
 
-**È comunque notevole che shared batta il caso**, perché nessuno l'ha chiesto al
-modello: `cl_sim_weight` allinea i canali comuni **degli utenti**, e non esiste
-alcun termine di allineamento cross-domain sugli item. La corrispondenza si è
-formata da sola, propagandosi attraverso lo spazio utente condiviso.
+La prima misura dava 47.6% su ventuno coppie, e sembrava un risultato solido:
+il canale shared batteva il caso mentre l'embedding grezzo restava fermo.
+Aggiungendo clusterizzazioni il valore è sceso a 34.8%, poi a 34.0%. La
+differenza rispetto a base è passata da 15.6 punti a 8.2 a **4.6**. E
+nell'ultimo run il canale grezzo ha fatto meglio di quello disentangled, per la
+prima volta.
 
-**Una stima che si è ridimensionata.** Le prime misure davano 47.6%, ma su 21
-coppie. Aggiungendo clusterizzazioni il valore si assesta intorno al 35%, e la
-differenza stimata scende da 15.6 punti a 8.2. È il comportamento tipico di un
-effetto misurato su pochi campioni. Per rilevare 8 punti servirebbero circa
-**500 coppie per canale**, cinque volte quelle raccolte.
+**Un effetto che si dissolve man mano che arrivano dati non è un effetto.**
 
-**Perché non basta aggiungere cluster.** Passando da 30 a 60 gruppi **entrambi**
-i canali crollano: shared da 47.6% a ~31%, base da 32% a ~25%. Più cluster
-significa etichette più simili fra loro dentro lo stesso dominio, che il giudice
-confonde. Le coppie in più si pagano in risoluzione: è una tensione strutturale
-del disegno, non una questione di quanto compute si spende.
+**La misura graduata, costruita apposta, non lo salva.** La scelta forzata fra
+quattro alternative restituisce un bit per chiamata, e con concetti di
+difficoltà molto diversa fra loro serviva un numero di coppie irraggiungibile.
+Abbiamo quindi sostituito il test: il giudice assegna un punteggio da 0 a 10 a
+ogni coppia, e per **ogni** concetto source valuta sia la coppia geometrica sia
+tre controlli casuali. Così la difficoltà intrinseca del concetto si annulla
+nella differenza invece di finire nel rumore.
 
-Le due strade che resterebbero: **altri checkpoint** (repliche genuinamente
-indipendenti invece di clusterizzazioni dello stesso modello) oppure una
-**misura graduata** al posto della scelta forzata — chiedere al giudice un
-punteggio di somiglianza sulla coppia geometrica e su una casuale, e confrontare
-le distribuzioni. Stesso costo in chiamate, molta più informazione per chiamata.
+| canale | coppia geometrica | controlli | differenza | p |
+|---|---|---|---|---|
+| shared | 5.94 | 5.46 | +0.48 | **0.148** |
+| base | 6.26 | 5.96 | +0.30 | 0.207 |
+
+Nessuno dei due è significativo. La misura più informativa che abbiamo, sullo
+stesso checkpoint, non conferma il risultato.
+
+**Perché non ci fidiamo del p = 0.007 dell'aggregato.** Preso da solo, il 34.0%
+del canale shared batte il caso con p = 0.007. Ma quel numero aggrega
+clusterizzazioni dello **stesso** modello sullo stesso catalogo, quindi non sono
+misure indipendenti e il p è ottimista — è scritto anche nel codice
+dell'aggregatore. E soprattutto il test più potente, sugli stessi dati, dice di
+no. Quando lo strumento migliore non conferma e quello più debole convince solo
+sommando misure correlate, la lettura onesta è che l'effetto non c'è.
+
+**Non è un problema di quanto compute ci mettiamo.** Con la variabilità
+osservata servirebbero 168 coppie per il canale shared e 253 per base; ne
+abbiamo 47 e 54. La misura graduata ha ridotto il fabbisogno da circa 500 a 168,
+quindi ha funzionato come progettata, ma resta fuori portata: per avere più
+coppie servono più cluster, e più cluster rendono le etichette troppo simili fra
+loro perché il giudice le distingua. Le due esigenze si contraddicono.
+
+**Cosa resta affermabile.** Che il canale shared produca una corrispondenza
+cross-domain semanticamente riconoscibile **non è dimostrato**, e le stime
+migliori che abbiamo la collocano vicino allo zero. Che sia migliore
+dell'embedding grezzo, ancora meno: 4.6 punti con p = 0.36 sulla scelta forzata,
++0.18 punti di scarto sulla graduata.
+
+Vale la pena ricordare che questo era **prevedibile dall'architettura**, e
+l'avevamo annotato prima di misurare: `cl_sim_weight` allinea i canali comuni
+**degli utenti**, e non esiste alcun termine che allinei gli item fra i due
+domini. Una corrispondenza a livello di prodotto sarebbe stata indiretta,
+ereditata attraverso lo spazio utente. I dati dicono che quell'eredità non
+arriva.
 
 ### 6.3 Ma la corrispondenza è un imbuto
 
@@ -566,16 +599,19 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
   grezzo. È emerso il contrario. Vale la pena registrarlo perché era una
   previsione motivata — non esiste una loss di allineamento sugli item — e si è
   rivelata falsa.
-- L'audit semantico poggia su **quattro clusterizzazioni di un solo
-  checkpoint**. Repliche su modelli diversi non ci sono: il tentativo è fallito
-  perché i checkpoint allenati sulla VM riferiscono directory di dataset con
-  nomi diversi da quelli locali.
+- L'audit semantico poggia su **cinque clusterizzazioni di un solo checkpoint**.
+  Repliche su modelli diversi non ci sono: il tentativo è fallito perché i
+  checkpoint allenati sulla VM riferiscono directory di dataset con nomi diversi
+  da quelli locali.
 - **Il test di corrispondenza si degrada al crescere dei cluster**, perché le
-  etichette diventano più simili fra loro e il giudice le confonde. Non è quindi
-  possibile comprare potenza statistica semplicemente alzando la granularità.
-- **Una stima ridimensionata**: la corrispondenza del canale shared era stata
-  riportata al 47.6% su 21 coppie; su 112 coppie scende al 34.8%. Le prime
-  misure erano ottimistiche.
+  etichette diventano più simili fra loro e il giudice le confonde. Non si può
+  quindi comprare potenza statistica alzando la granularità: le due esigenze si
+  contraddicono.
+- **Un risultato ritirato.** La corrispondenza cross-domain del canale shared era
+  stata riportata come positiva: 47.6% su 21 coppie, poi 34.8% su 112, infine
+  34.0% su 159, con la differenza rispetto a base scesa da 15.6 a 4.6 punti. La
+  misura graduata, più potente, dà p = 0.148. Non è dimostrata, e la traiettoria
+  suggerisce che non ci sia.
 
 ---
 
@@ -637,12 +673,14 @@ trasferiti dall'altro dominio" presuppone che quel canale contenga davvero
 conoscenza trasferita, e la sezione 5 mostra che non è così.
 
 **Il Contributo 2 aggiunge il livello semantico** (§6). L'attribuzione dice
-quanto pesa un canale; l'audit dice di cosa parla. Ed è la parte che ha prodotto
-il primo risultato **positivo** sul modello: il canale shared porta una
-corrispondenza cross-domain che un LLM riconosce (34.8% contro un caso del 25%,
-p = 0.013), mentre l'embedding grezzo resta al caso — pur non esistendo alcuna
-loss che allinei gli item fra i due domini. Che shared sia meglio di base resta
-però non dimostrato (p = 0.17).
+quanto pesa un canale; l'audit dice di cosa parla, e permette di dare un nome
+leggibile a un sottospazio che altrimenti resta una lista di numeri. Le etichette
+che produce superano un test di validità severo, quindi lo strumento misura.
+
+Sulla domanda scientifica, però, la risposta è negativa: **il canale shared non
+mostra una corrispondenza cross-domain semanticamente riconoscibile**. Il
+risultato che sembrava esserci si è dissolto man mano che arrivavano dati, e la
+misura appaiata costruita apposta per avere più potenza non lo conferma (§6.2).
 
 **La validazione causale** (§5.6) è la prova più severa che il framework abbia
 superato: le raccomandazioni che crollano azzerando il canale shared sono quelle
