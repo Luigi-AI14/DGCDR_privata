@@ -14,6 +14,8 @@ own summary.
 
 import random
 
+import numpy as np
+
 MATCHING_SYSTEM = """You judge whether two product themes describe the same
 underlying customer taste, across different product categories.
 
@@ -96,6 +98,94 @@ def cross_domain_matching(source_concepts, target_concepts, pairing, client,
         'n_way': n_way,
         'per_pair': results,
     }
+
+
+RATING_SYSTEM = """You rate how closely two product themes reflect the same
+underlying customer taste, across different product categories.
+
+10 means a customer drawn to one would clearly be drawn to the other.
+0 means there is no connection between the two tastes.
+
+Answer with a single number from 0 to 10 and nothing else."""
+
+
+def graded_matching(source_concepts, target_concepts, pairing, client,
+                    n_controls=3, seed=42, verbose=True):
+    """Rate the model's pairing against random ones, paired per source concept.
+
+    The forced choice of :func:`cross_domain_matching` yields one bit per call,
+    which is why it could not separate the shared channel from the base one at
+    any affordable number of clusters. Rating the pairs instead gives a number,
+    and rating the true pair and its controls for the *same* source concept
+    makes the comparison paired: the noise from a concept simply being easy or
+    hard to match cancels out.
+
+    The judge sees one pair at a time and is never told which is which.
+    """
+    labelled_targets = [i for i, c in enumerate(target_concepts) if c.label]
+    rng = random.Random(seed)
+
+    def ask(source_label, target_label):
+        prompt = (f'Theme A: "{source_label}"\n'
+                  f'Theme B: "{target_label}"\n\n'
+                  f'How closely do A and B reflect the same underlying taste? '
+                  f'Answer 0-10.')
+        return client.rate(prompt, system=RATING_SYSTEM)
+
+    pairs, unusable = [], 0
+    for index, concept in enumerate(source_concepts):
+        if not concept.label or index >= len(pairing):
+            continue
+        geometric = pairing[index]
+        if geometric not in labelled_targets:
+            continue
+
+        true_score = ask(concept.label, target_concepts[geometric].label)
+        others = [i for i in labelled_targets if i != geometric]
+        controls = [ask(concept.label, target_concepts[i].label)
+                    for i in rng.sample(others, min(n_controls, len(others)))]
+        controls = [c for c in controls if c is not None]
+
+        if true_score is None or not controls:
+            unusable += 1
+            continue
+
+        control_mean = float(np.mean(controls))
+        pairs.append({
+            'source_label': concept.label,
+            'geometric_label': target_concepts[geometric].label,
+            'score_geometric': true_score,
+            'score_control_mean': control_mean,
+            'difference': true_score - control_mean,
+        })
+        if verbose:
+            print(f"  {true_score:4.1f} vs {control_mean:4.1f}  {concept.label}",
+                  flush=True)
+
+    if not pairs:
+        return {'n_pairs': 0, 'n_unusable': unusable}
+
+    differences = np.array([p['difference'] for p in pairs])
+    return {
+        'n_pairs': len(pairs),
+        'n_unusable': unusable,
+        'mean_geometric': float(np.mean([p['score_geometric'] for p in pairs])),
+        'mean_control': float(np.mean([p['score_control_mean'] for p in pairs])),
+        'mean_difference': float(np.mean(differences)),
+        'n_positive': int((differences > 0).sum()),
+        'n_negative': int((differences < 0).sum()),
+        'p_paired': _paired_permutation_p(differences),
+        'per_pair': pairs,
+    }
+
+
+def _paired_permutation_p(differences, n=20000, seed=42):
+    """Two-sided paired permutation test: flip the sign of each difference."""
+    rng = np.random.default_rng(seed)
+    observed = abs(float(np.mean(differences)))
+    signs = rng.choice([-1.0, 1.0], size=(n, len(differences)))
+    null = np.abs((signs * differences).mean(axis=1))
+    return float((null >= observed).mean())
 
 
 VALIDITY_SYSTEM = """You match a description to a group of products.

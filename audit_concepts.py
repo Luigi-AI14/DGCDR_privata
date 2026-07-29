@@ -34,7 +34,11 @@ from extensions.explainability.channels import (
     decompose_domain,
     verify_decomposition,
 )
-from extensions.explainability.concept_eval import cross_domain_matching, label_validity
+from extensions.explainability.concept_eval import (
+    cross_domain_matching,
+    graded_matching,
+    label_validity,
+)
 from extensions.explainability.concept_naming import name_concepts
 from extensions.explainability.concepts import (
     concept_centroids,
@@ -75,8 +79,13 @@ def audit_channel(model, decompositions, channel, catalogue, namer, judge, args)
     matching = cross_domain_matching(concepts['source'], concepts['target'],
                                      pairing, judge, n_way=args.n_way)
 
+    print("
+Corrispondenza, misura graduata...")
+    graded = graded_matching(concepts['source'], concepts['target'], pairing, judge)
+
     return {
         'channel': channel,
+        'graded_matching': graded,
         'concepts': {d: [c.to_dict() for c in concepts[d]] for d in concepts},
         'geometric_pairing': pairing,
         'label_validity': validity,
@@ -153,9 +162,15 @@ def main():
     for report in reports:
         v = report['label_validity']
         m = report['cross_domain_matching']
+        g = report['graded_matching']
         fmt = lambda x: f"{x * 100:.1f}%" if x is not None else "n/d"
         print(f"{report['channel']:<10} {fmt(v['source']['accuracy']):>13} "
               f"{fmt(v['target']['accuracy']):>13} {fmt(m['agreement']):>16}")
+        if g.get('n_pairs'):
+            print(f"{'':<10} graduata: {g['mean_geometric']:.2f} vs "
+                  f"{g['mean_control']:.2f} controllo, differenza "
+                  f"{g['mean_difference']:+.2f} (p = {g['p_paired']:.4f}, "
+                  f"n = {g['n_pairs']})")
     print(f"\ncaso: {100.0 / args.n_way:.1f}%")
     print(f"JSON: {path}")
     return 0

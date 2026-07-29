@@ -59,6 +59,23 @@ class OllamaClient:
         # Some builds return the reasoning inline even with think disabled.
         return THINK_BLOCK.sub('', content).strip()
 
+    def rate(self, prompt, system=None, lo=0, hi=10):
+        """Ask for a number in [lo, hi]. Returns None if the answer is unusable.
+
+        A graded answer carries far more than a forced choice: the same number
+        of calls buys a distribution instead of a count of hits, which is what
+        makes a paired test possible on a few dozen concepts.
+        """
+        answer = self.ask(prompt, system=system, max_tokens=2000 if self.think else 60)
+        match = re.search(r'-?\d+(?:[.,]\d+)?', answer.replace(',', '.'))
+        if not match:
+            return None
+        try:
+            value = float(match.group(0))
+        except ValueError:
+            return None
+        return value if lo <= value <= hi else None
+
     def choose(self, prompt, options, system=None):
         """Ask for one option out of several, and return its index.
 
