@@ -288,6 +288,8 @@ def main():
     parser.add_argument('--metadata', nargs='*', default=None,
                         help="JSONL item metadata files (optional)")
     parser.add_argument('--metadata_id_field', default='parent_asin')
+    parser.add_argument('--metadata_cache', default=None,
+                        help="Cached, filtered catalogue; built from --metadata if absent")
     parser.add_argument('--llm_model', type=str, default=None,
                         help="Model name for verbalisation; omit to skip the LLM stage")
     parser.add_argument('--llm_base_url', type=str, default=None,
@@ -329,7 +331,9 @@ def main():
             "The attribution would not be faithful; refusing to emit explanations."
         )
 
-    catalogue = load_catalogue(dataset, args.metadata, id_field=args.metadata_id_field)
+    catalogue = load_catalogue(dataset, args.metadata,
+                               cache_path=args.metadata_cache,
+                               id_field=args.metadata_id_field)
     if args.metadata and not catalogue.has_metadata():
         print("[warn] metadata files given but no records loaded; check --metadata_id_field.")
 
