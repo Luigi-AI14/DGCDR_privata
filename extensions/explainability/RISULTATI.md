@@ -393,152 +393,36 @@ punto di vista dell'accuratezza — in linea con §5.1, dove moltiplicare
 
 ---
 
-## 6. L'audit semantico: cosa contengono i canali (Contributo 2)
+## 6. Una strada esplorata e abbandonata: l'audit semantico
 
-L'attribuzione dice **quanto** un canale ha pesato. Non dice **di cosa parla**.
-Per una spiegazione in linguaggio naturale serve il contenuto, e qui entra
-l'LLM.
+Abbiamo provato a usare un LLM come strumento di misura, per dare un nome
+leggibile a cosa contengono i canali. Il procedimento: raggruppare gli item
+vicini in ciascun sottospazio, farli nominare alla cieca a un LLM che vede solo
+titoli e categorie, e verificare con un secondo modello che quei nomi
+identifichino davvero i gruppi.
 
-Il procedimento: si raggruppano gli item vicini nel sottospazio di ciascun
-dominio, un LLM (`qwen3.5:9b`) nomina i gruppi **alla cieca** — solo titoli e
-categorie, mescolati, senza sapere dominio, canale o posizione — e un **secondo**
-LLM (`gemma4`) verifica che quei nomi identifichino davvero i gruppi.
+**Lo strumento funzionava.** Le etichette superavano un test di validità severo
+— dal 41% al 62% di riconoscimenti contro un caso del 25%, tutti significativi —
+quindi si può davvero tradurre un sottospazio in una frase leggibile. Ne
+uscivano concetti sensati come *"DSLR and Mirrorless Camera Accessories"* o
+*"Computer Internal Components"*.
 
-### 6.1 Le etichette sono valide
+**La domanda scientifica però ha dato risposta negativa.** Volevamo sapere se i
+concetti del canale shared dei due domini si corrispondessero — se cioè
+`cl_sim_weight` producesse un allineamento semantico reale. Il risultato è
+sembrato esserci all'inizio (47.6% su 21 coppie) e si è dissolto man mano che
+arrivavano dati: 34.0% su 159 coppie, con la differenza rispetto all'embedding
+grezzo scesa da 15.6 punti a 4.6. Una misura appaiata costruita apposta per
+avere più potenza ha dato p = 0.148.
 
-Test a 4 alternative su item **tenuti da parte**, mai visti durante il naming:
+Era peraltro prevedibile dall'architettura, e l'avevamo annotato prima di
+misurare: `cl_sim_weight` allinea i canali comuni **degli utenti**, e non esiste
+alcun termine che allinei gli item fra i due domini.
 
-| | corretti | accuratezza | p |
-|---|---|---|---|
-| shared, source | 12/29 | 41.4% | 0.039 |
-| shared, target | 17/29 | 58.6% | 0.0001 |
-| base, source | 15/30 | 50.0% | 0.003 |
-| base, target | 16/26 | 61.5% | 0.0001 |
-
-Tutte significative. Lo strumento misura qualcosa, quindi il resto è
-interpretabile. Era il cancello del piano: se le etichette fossero state
-plausibili ma vuote, ci saremmo fermati qui.
-
-### 6.2 La corrispondenza cross-domain: un risultato che si è dissolto
-
-Questa doveva essere la domanda centrale del Contributo 2: quando il modello
-avvicina un gruppo di prodotti elettronici a un gruppo di capi d'abbigliamento,
-quell'accostamento ha un senso leggibile?
-
-Il test confronta due accoppiamenti costruiti in modo indipendente. Il primo è
-quello che il modello ha codificato: per ogni cluster del dominio source, il
-cluster target il cui centroide è più vicino. Il secondo è quello che un LLM
-legge dalle sole etichette, senza vedere niente della geometria. Se i due vanno
-d'accordo più del caso, la corrispondenza geometrica ha un contenuto semantico.
-
-Il controllo decisivo è il canale **base**, cioè l'embedding grezzo senza alcun
-disentanglement: se anche lì la corrispondenza regge, non l'ha prodotta la
-separazione dei canali, c'era già nella struttura collaborativa.
-
-**Cosa è successo, run dopo run.** All'inizio il risultato sembrava esserci, e
-netto:
-
-| run | shared | base |
-|---|---|---|
-| k=12 | 50.0% (2/4) | 36.4% |
-| k=30 | 47.6% (10/21) | 32.0% |
-| k=60, seed 42 | 30.2% (13/43) | 27.8% |
-| k=60, seed 7 | 31.8% (14/44) | 21.7% |
-| k=60, terzo | 31.9% (15/47) | **37.0%** |
-| **aggregato** | **34.0%** (54/159) | **29.4%** (60/204) |
-
-La prima misura dava 47.6% su ventuno coppie, e sembrava un risultato solido:
-il canale shared batteva il caso mentre l'embedding grezzo restava fermo.
-Aggiungendo clusterizzazioni il valore è sceso a 34.8%, poi a 34.0%. La
-differenza rispetto a base è passata da 15.6 punti a 8.2 a **4.6**. E
-nell'ultimo run il canale grezzo ha fatto meglio di quello disentangled, per la
-prima volta.
-
-**Un effetto che si dissolve man mano che arrivano dati non è un effetto.**
-
-**La misura graduata, costruita apposta, non lo salva.** La scelta forzata fra
-quattro alternative restituisce un bit per chiamata, e con concetti di
-difficoltà molto diversa fra loro serviva un numero di coppie irraggiungibile.
-Abbiamo quindi sostituito il test: il giudice assegna un punteggio da 0 a 10 a
-ogni coppia, e per **ogni** concetto source valuta sia la coppia geometrica sia
-tre controlli casuali. Così la difficoltà intrinseca del concetto si annulla
-nella differenza invece di finire nel rumore.
-
-| canale | coppia geometrica | controlli | differenza | p |
-|---|---|---|---|---|
-| shared | 5.94 | 5.46 | +0.48 | **0.148** |
-| base | 6.26 | 5.96 | +0.30 | 0.207 |
-
-Nessuno dei due è significativo. La misura più informativa che abbiamo, sullo
-stesso checkpoint, non conferma il risultato.
-
-**Perché non ci fidiamo del p = 0.007 dell'aggregato.** Preso da solo, il 34.0%
-del canale shared batte il caso con p = 0.007. Ma quel numero aggrega
-clusterizzazioni dello **stesso** modello sullo stesso catalogo, quindi non sono
-misure indipendenti e il p è ottimista — è scritto anche nel codice
-dell'aggregatore. E soprattutto il test più potente, sugli stessi dati, dice di
-no. Quando lo strumento migliore non conferma e quello più debole convince solo
-sommando misure correlate, la lettura onesta è che l'effetto non c'è.
-
-**Non è un problema di quanto compute ci mettiamo.** Con la variabilità
-osservata servirebbero 168 coppie per il canale shared e 253 per base; ne
-abbiamo 47 e 54. La misura graduata ha ridotto il fabbisogno da circa 500 a 168,
-quindi ha funzionato come progettata, ma resta fuori portata: per avere più
-coppie servono più cluster, e più cluster rendono le etichette troppo simili fra
-loro perché il giudice le distingua. Le due esigenze si contraddicono.
-
-**Cosa resta affermabile.** Che il canale shared produca una corrispondenza
-cross-domain semanticamente riconoscibile **non è dimostrato**, e le stime
-migliori che abbiamo la collocano vicino allo zero. Che sia migliore
-dell'embedding grezzo, ancora meno: 4.6 punti con p = 0.36 sulla scelta forzata,
-+0.18 punti di scarto sulla graduata.
-
-Vale la pena ricordare che questo era **prevedibile dall'architettura**, e
-l'avevamo annotato prima di misurare: `cl_sim_weight` allinea i canali comuni
-**degli utenti**, e non esiste alcun termine che allinei gli item fra i due
-domini. Una corrispondenza a livello di prodotto sarebbe stata indiretta,
-ereditata attraverso lo spazio utente. I dati dicono che quell'eredità non
-arriva.
-
-### 6.3 Ma la corrispondenza è un imbuto
-
-Quanti cluster target distinti vengono raggiunti dai 30 cluster source:
-
-| canale | osservato (3 seed) | atteso a caso |
-|---|---|---|
-| **shared** | 14 (13, 14, 15) | 19.2 |
-| base | 17 (16, 17, 19) | 19.2 |
-
-Il canale base è **indistinguibile dal caso**: due grafi separati, con un solo
-item in comune, non hanno motivo di corrispondersi. Il canale shared è
-**significativamente più concentrato del caso**: molti cluster source convergono
-su poche regioni target.
-
-E otto dei trenta puntano su cluster target che l'LLM **non ha saputo nominare**.
-Non è un effetto della dimensione: il target più attrattivo del run a 12 cluster
-era il **più piccolo** dei dodici (1.297 item).
-
-Convivono quindi due cose: **dove la corrispondenza è leggibile è anche corretta,
-ma in un terzo dei casi punta su regioni che non significano nulla.**
-
-### 6.4 Un bug che vale la pena raccontare
-
-Il primo run dava, sul dominio source, una validità del **16.7% — sotto il caso
-del 25%**. Un risultato sotto il caso è quasi sempre il segno di un errore a
-monte, non di un fenomeno debole.
-
-Lo era: leggevo gli item del source dalla decomposizione del **target**, dove
-quelle righe non sono mai state addestrate. Norma media **0.021** contro 0.591.
-Stavo raggruppando rumore, e infatti i cluster venivano tutti della stessa
-dimensione (5116–5295), che è la firma di k-means su dati senza struttura.
-
-Corretto l'errore, la validità del source passa a **58.3%** e le etichette
-diventano distinte ("DSLR and Mirrorless Camera Accessories", "Computer Internal
-Components and Peripherals") invece di dodici varianti della stessa frase.
-
-Ora ogni dominio viene decomposto dalla propria propagazione, e lo script stampa
-la norma media dei canali: se ricompare un valore intorno a 0.02, il problema si
-vede prima di diventare un risultato.
+Il codice è stato rimosso dal repository perché non regge un contributo. Resta
+qui la nota, perché un vicolo cieco documentato vale più di uno cancellato: se
+la domanda "avete provato a guardare dentro i canali con un LLM?" dovesse
+tornare, la risposta è sì, ed è questa.
 
 ---
 
@@ -599,19 +483,8 @@ utenti. Non è un effetto debole: è un artefatto degli iperparametri. Ritirato.
   grezzo. È emerso il contrario. Vale la pena registrarlo perché era una
   previsione motivata — non esiste una loss di allineamento sugli item — e si è
   rivelata falsa.
-- L'audit semantico poggia su **cinque clusterizzazioni di un solo checkpoint**.
-  Repliche su modelli diversi non ci sono: il tentativo è fallito perché i
-  checkpoint allenati sulla VM riferiscono directory di dataset con nomi diversi
-  da quelli locali.
-- **Il test di corrispondenza si degrada al crescere dei cluster**, perché le
-  etichette diventano più simili fra loro e il giudice le confonde. Non si può
-  quindi comprare potenza statistica alzando la granularità: le due esigenze si
-  contraddicono.
-- **Un risultato ritirato.** La corrispondenza cross-domain del canale shared era
-  stata riportata come positiva: 47.6% su 21 coppie, poi 34.8% su 112, infine
-  34.0% su 159, con la differenza rispetto a base scesa da 15.6 a 4.6 punti. La
-  misura graduata, più potente, dà p = 0.148. Non è dimostrata, e la traiettoria
-  suggerisce che non ci sia.
+- **Un risultato ritirato** (§6): la corrispondenza cross-domain del canale
+  shared era stata riportata come positiva, ed è svanita all'aumentare dei dati.
 
 ---
 
@@ -622,14 +495,17 @@ locale non è possibile: il training da solo richiede ~11,7 GB di VRAM.
 
 **2. Replica con più seed**, per stabilire la stabilità delle misure.
 
-**3. Controfattuale**: azzerare il canale shared, ricalcolare le classifiche, e
-passare dall'attribuzione alla causalità.
+**3. La loss di ortogonalità normalizzata.** È l'esperimento che nasce
+direttamente da §5.1: penalizzare il coseno invece del prodotto scalare grezzo.
+Il coseno è invariante di scala, quindi la scorciatoia dell'accorciamento — che
+oggi spiega il 57% della riduzione della loss — sparisce, e al modello resta
+solo la rotazione.
 
-**4. Chiudere il confronto shared contro base** (§6.2). Aggiungere cluster non
-funziona: degrada la misura. Le due strade praticabili sono ripetere l'audit su
-**altri checkpoint** — da fare sulla VM, dove quei modelli si caricano — oppure
-sostituire la scelta forzata con una **misura graduata**, che estrae molta più
-informazione da ogni chiamata.
+È una previsione falsificabile. Se il probe scende, la loss era formulata male e
+la correzione è di una riga. Se resta al 99%, il difetto è concettuale e non
+implementativo, e nemmeno l'ortogonalità vera basta. Entrambi gli esiti sono
+risultati, ed è anche l'unico punto in cui il lavoro indica una correzione
+invece di limitarsi a constatare un fallimento.
 
 ---
 
@@ -672,15 +548,9 @@ sarebbe fuorviante — dire a un utente "ti consigliamo questo per i gusti
 trasferiti dall'altro dominio" presuppone che quel canale contenga davvero
 conoscenza trasferita, e la sezione 5 mostra che non è così.
 
-**Il Contributo 2 aggiunge il livello semantico** (§6). L'attribuzione dice
-quanto pesa un canale; l'audit dice di cosa parla, e permette di dare un nome
-leggibile a un sottospazio che altrimenti resta una lista di numeri. Le etichette
-che produce superano un test di validità severo, quindi lo strumento misura.
-
-Sulla domanda scientifica, però, la risposta è negativa: **il canale shared non
-mostra una corrispondenza cross-domain semanticamente riconoscibile**. Il
-risultato che sembrava esserci si è dissolto man mano che arrivavano dati, e la
-misura appaiata costruita apposta per avere più potenza non lo conferma (§6.2).
+**Una strada è stata esplorata e abbandonata** (§6): usare un LLM per dare un
+nome ai sottospazi. Lo strumento funzionava, ma la domanda scientifica ha dato
+risposta negativa e il codice è stato rimosso.
 
 **La validazione causale** (§5.6) è la prova più severa che il framework abbia
 superato: le raccomandazioni che crollano azzerando il canale shared sono quelle
