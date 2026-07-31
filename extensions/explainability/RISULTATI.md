@@ -1,8 +1,9 @@
 # Cosa abbiamo fatto e cosa abbiamo trovato
 
-Documento di lavoro, aggiornato al 28 luglio 2026. Branch `explainability-2`.
-Sei checkpoint analizzati: CDs→Instruments, Elec→Cloth, Cloth→Elec a tre valori
-di `cl_org_weight`, e Movie→Book su Douban.
+Documento di lavoro, aggiornato al 31 luglio 2026. Branch `normalized-losses`.
+Nove checkpoint analizzati: CDs→Instruments, Elec→Cloth, Cloth→Elec a tre valori
+di `cl_org_weight`, Movie→Book su Douban, e tre varianti di formulazione
+(§5.1b).
 
 ---
 
@@ -196,6 +197,47 @@ la loss premia e che sull'obiettivo non incide.
 
 Canali ortogonali fino a 0.007, e riconoscibili per dominio al 99.8%. Il reperto
 non dipende dal dataset.
+
+### 5.1b Abbiamo provato a correggerla, e non basta
+
+Le due diagnosi di §5.1 e §5.4 suggerivano ciascuna una correzione precisa. Le
+abbiamo implementate e allenate, su Elec→Cloth, cambiando una cosa per volta.
+
+| | pubblicata | loss normalizzata | senza √d | entrambe |
+|---|---|---|---|---|
+| attention shared (target) | 49.5% | ~50% | **74.7%** | 62.5% |
+| deviazione dell'attention | 0.013 | 0.013 | **0.128** | 0.154 |
+| ‖e^c‖ | 1.218 | **1.231** | 1.442 | 1.409 |
+| coseno | 0.037 | 0.079 | 0.034 | 0.068 |
+| dCor gap (target) | +0.649 | +0.685 | +0.750 | +0.724 |
+| **probe MLP su e^c** | 99.13% | **99.77%** | **99.82%** | **99.86%** |
+| Recall@20 | .0253 | .0251 | .0252 | .0252 |
+
+**La loss normalizzata elimina la scorciatoia, e non serve a niente.** Penalizzando
+il coseno invece del prodotto scalare grezzo, il canale non si accorcia più: la
+norma resta a 1.231 invece di crollare a 0.286 come faceva sotto pressione forte.
+La diagnosi di §5.1 era quindi corretta nel meccanismo. Ma il probe resta al
+99.77% e il gap di dCor peggiora. Il difetto **non era nella formulazione**, che
+era la spiegazione più ottimistica: una riga da correggere.
+
+**Togliere il √d fa tornare viva l'attention.** La deviazione dei pesi passa da
+0.013 a 0.128, e i valori si distribuiscono fra 0.03 e 1.00 invece di stare
+tutti a 0.5. Il meccanismo descritto come fusione adattiva torna a essere
+adattivo. Ma il probe resta al 99.82%.
+
+**Nemmeno insieme.** La combinazione dà 99.86%, il valore più alto dei quattro.
+
+**Cosa se ne ricava.** Nessuna delle due correzioni tocca la fuga di
+informazione, e la costanza del probe fra 99.1% e 99.9% attraverso quattro
+formulazioni diverse dice che il problema non sta in come i vincoli sono
+scritti. Sta in cosa possono fare: sono vincoli sull'angolo fra due vettori, e
+§5.3 mostra che l'identità di dominio è distribuita e non linearmente
+accessibile. **Un vincolo geometrico non può rimuovere informazione fatta così,
+comunque lo si formuli.**
+
+L'accuratezza non cambia mai, in nessuna delle quattro varianti: fra .0251 e
+.0253. Anche questo è coerente con §5.6, dove azzerare un canale non costava
+nulla.
 
 ### 5.2 Sul lato item la separazione non avviene affatto
 
@@ -495,17 +537,10 @@ locale non è possibile: il training da solo richiede ~11,7 GB di VRAM.
 
 **2. Replica con più seed**, per stabilire la stabilità delle misure.
 
-**3. La loss di ortogonalità normalizzata.** È l'esperimento che nasce
-direttamente da §5.1: penalizzare il coseno invece del prodotto scalare grezzo.
-Il coseno è invariante di scala, quindi la scorciatoia dell'accorciamento — che
-oggi spiega il 57% della riduzione della loss — sparisce, e al modello resta
-solo la rotazione.
-
-È una previsione falsificabile. Se il probe scende, la loss era formulata male e
-la correzione è di una riga. Se resta al 99%, il difetto è concettuale e non
-implementativo, e nemmeno l'ortogonalità vera basta. Entrambi gli esiti sono
-risultati, ed è anche l'unico punto in cui il lavoro indica una correzione
-invece di limitarsi a constatare un fallimento.
+**3. Douban senza la divisione per √d**, per verificare se anche la barra più
+estrema della Figura 3 (Movie, 28/72) si riproduca come è successo su Elec/Cloth
+(§5.4). Chiuderebbe il reperto sull'attention con una spiegazione precisa invece
+che con una constatazione.
 
 ---
 
