@@ -141,7 +141,11 @@ def _attention_channels(model, base, common, specific):
     a_1 = torch.sum(torch.mul(base, common), dim=1)
     a_2 = torch.sum(torch.mul(base, specific), dim=1)
 
-    scale = np.sqrt(base.shape[-1])
+    # Ask the model for its own scale: a checkpoint trained without the sqrt(d)
+    # division would otherwise be decomposed with the wrong denominator, and the
+    # reconstruction check would fail.
+    scale = model.softmax_scale(base.shape[-1]) if hasattr(model, 'softmax_scale') \
+        else np.sqrt(base.shape[-1])
     att = torch.cat((a_1.unsqueeze(1), a_2.unsqueeze(1)), dim=1) / scale
     softed_att = F.softmax(att, dim=1)
 

@@ -63,6 +63,24 @@ class DGCDR(CrossDomainRecommender):
         self.item_cl_weight = config['item_cl_weight']  # (float) weights of item disentanglement loss
         self.item_mapping = config['item_mapping']  # (bool) whether to use a non-linear mapping for item
         self.item_disentangle = config['item_disentangle']  # (bool) whether to apply disentanglement and fusion to item
+
+        # --- TWO FORMULATION EXPERIMENTS ---
+        # Both default to the published behaviour; nothing changes unless set.
+        #
+        # org_loss_normalized: the orthogonality penalty is on the raw dot
+        # product, which the model can shrink by shortening e^c instead of
+        # rotating it -- measured at 57% of the reduction. The cosine is
+        # scale-invariant, so that shortcut disappears.
+        #
+        # attention_scale: the fusion weights are a softmax over logits divided
+        # by sqrt(d). With d=256 that divides by 16, and the resulting weights
+        # sit at 50/50 for almost every user. Setting it to 'none' removes the
+        # division.
+        self.org_loss_normalized = config['org_loss_normalized'] \
+            if 'org_loss_normalized' in config else False
+        self.attention_scale = config['attention_scale'] \
+            if 'attention_scale' in config else 'sqrt_d'
+        # ------------------------------------
         
         # --- TEXT EMBEDDING CONFIG ---
         self.use_text_embeddings = config['use_text_embeddings'] if 'use_text_embeddings' in config else False
@@ -312,6 +330,15 @@ class DGCDR(CrossDomainRecommender):
         new_embeddings = self.dropout(new_embeddings)
         return new_embeddings
 
+    def softmax_scale(self, dim):
+        """Denominator of the attention logits. Public so the attribution can
+        mirror it without guessing."""
+        if self.attention_scale in ('none', 'one', 1, 1.0):
+            return 1.0
+        if self.attention_scale in ('sqrt_d', None):
+            return np.sqrt(dim)
+        return float(self.attention_scale)
+
     # feature fusion and update
     def fuse_and_update(self, common_preference, specific_preference, user_embeddings):
         if self.fuse_mode == 'concat':
@@ -328,7 +355,7 @@ class DGCDR(CrossDomainRecommender):
             b_1 = a_1.unsqueeze(1)
             b_2 = a_2.unsqueeze(1)
 
-            scale = np.sqrt(user_embeddings.shape[-1])
+            scale = self.softmax_scale(user_embeddings.shape[-1])
             att = torch.cat((b_1, b_2), dim=1) / scale
             softed_att = F.softmax(att, dim=1)
 
@@ -634,10 +661,18 @@ class DGCDR(CrossDomainRecommender):
             losses.append(self.cl_sim_weight * L_sim)
             # Encoder orthogonality loss
             if self.cl_org_weight != 0:
-                sr_L_ort_cs = torch.mean(torch.sum(torch.mul(sr_common_c, sr_common_s), dim=1) ** 2,
-                                         dim=0)  # force public and specific features to separate from each other
-                tg_L_ort_cs = torch.mean(torch.sum(torch.mul(tg_common_c, tg_common_s), dim=1) ** 2,
-                                         dim=0)  # force public and specific features to separate from each other
+                if self.org_loss_normalized:
+                    # Penalise the angle only. Shortening e^c no longer reduces
+                    # the term, so the model has to rotate the two apart.
+                    sr_L_ort_cs = torch.mean(F.cosine_similarity(
+                        sr_common_c, sr_common_s, dim=1) ** 2, dim=0)
+                    tg_L_ort_cs = torch.mean(F.cosine_similarity(
+                        tg_common_c, tg_common_s, dim=1) ** 2, dim=0)
+                else:
+                    sr_L_ort_cs = torch.mean(torch.sum(torch.mul(sr_common_c, sr_common_s), dim=1) ** 2,
+                                             dim=0)  # force public and specific features to separate from each other
+                    tg_L_ort_cs = torch.mean(torch.sum(torch.mul(tg_common_c, tg_common_s), dim=1) ** 2,
+                                             dim=0)  # force public and specific features to separate from each other
                 losses.extend(self.cl_org_weight * loss for loss in [sr_L_ort_cs, tg_L_ort_cs])
 
             # Decoder loss
